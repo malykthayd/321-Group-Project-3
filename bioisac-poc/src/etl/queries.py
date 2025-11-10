@@ -1,0 +1,170 @@
+"""Database helper functions shared across ETL and Slack bot."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, List
+
+import mysql.connector
+
+
+_ENV_LOADED = False
+
+
+def load_env_once() -> None:
+    global _ENV_LOADED
+    if _ENV_LOADED:
+        return
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        _ENV_LOADED = True
+        return
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+    _ENV_LOADED = True
+
+
+def get_connection():
+    load_env_once()
+    config = {
+        "host": os.environ.get("DB_HOST"),
+        "user": os.environ.get("DB_USER"),
+        "password": os.environ.get("DB_PASS"),
+        "database": os.environ.get("DB_NAME"),
+        "port": int(os.environ.get("DB_PORT", "3306")),
+    }
+    return mysql.connector.connect(**config)
+
+
+def init_db(conn) -> None:
+    schema_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "schema.sql")
+    with open(schema_path, "r", encoding="utf-8") as f:
+        schema_sql = f.read()
+    cursor = conn.cursor()
+    for statement in schema_sql.split(";\n"):
+        stmt = statement.strip()
+        if stmt:
+            cursor.execute(stmt)
+    cursor.close()
+    conn.commit()
+
+
+def upsert_vuln(conn, record: Dict[str, Any]) -> None:
+    fields = [
+        "cve_id",
+        "title",
+        "description",
+        "cvss_base",
+        "cvss_vector",
+        "severity",
+        "published",
+        "last_modified",
+        "vendor",
+        "product",
+        "source_list",
+        "euvd_notes",
+        "advisory_url",
+        "plain_summary",
+        "safe_action",
+    ]
+    payload = {field: record.get(field) for field in fields}
+    payload["source_list"] = json.dumps(sorted(set(record.get("source_list", [])))) if record.get("source_list") else None
+    sql = (
+        "INSERT INTO vulns (cve_id, title, description, cvss_base, cvss_vector, severity, published, "
+        "last_modified, vendor, product, source_list, euvd_notes, advisory_url, plain_summary, safe_action) "
+        "VALUES (%(cve_id)s, %(title)s, %(description)s, %(cvss_base)s, %(cvss_vector)s, %(severity)s, "
+        "%(published)s, %(last_modified)s, %(vendor)s, %(product)s, %(source_list)s, %(euvd_notes)s, "
+        "%(advisory_url)s, %(plain_summary)s, %(safe_action)s) "
+        "ON DUPLICATE KEY UPDATE title=VALUES(title), description=VALUES(description), cvss_base=VALUES(cvss_base),"
+        " cvss_vector=VALUES(cvss_vector), severity=VALUES(severity), published=VALUES(published),"
+        " last_modified=VALUES(last_modified), vendor=VALUES(vendor), product=VALUES(product),"
+        " source_list=VALUES(source_list), euvd_notes=VALUES(euvd_notes), advisory_url=VALUES(advisory_url),"
+        " plain_summary=VALUES(plain_summary), safe_action=VALUES(safe_action)"
+    )
+    cursor = conn.cursor()
+    cursor.execute(sql, payload)
+    conn.commit()
+    cursor.close()
+
+
+def upsert_tag(conn, tag: Dict[str, Any]) -> None:
+    sql = (
+        "INSERT INTO tags (cve_id, kev_flag, ics_flag, medical_flag, bio_keyword_flag, recent_flag, cvss_high_flag,"
+        " bio_score, source_count, confidence_level, conflict_flag, category_labels, notes) "
+        "VALUES (%(cve_id)s, %(kev_flag)s, %(ics_flag)s, %(medical_flag)s, %(bio_keyword_flag)s, %(recent_flag)s,"
+        " %(cvss_high_flag)s, %(bio_score)s, %(source_count)s, %(confidence_level)s, %(conflict_flag)s, "
+        "%(category_labels)s, %(notes)s) "
+        "ON DUPLICATE KEY UPDATE kev_flag=VALUES(kev_flag), ics_flag=VALUES(ics_flag),"
+        " medical_flag=VALUES(medical_flag), bio_keyword_flag=VALUES(bio_keyword_flag),"
+        " recent_flag=VALUES(recent_flag), cvss_high_flag=VALUES(cvss_high_flag), bio_score=VALUES(bio_score),"
+        " source_count=VALUES(source_count), confidence_level=VALUES(confidence_level),"
+        " conflict_flag=VALUES(conflict_flag), category_labels=VALUES(category_labels),"
+        " notes=VALUES(notes), last_seen=CURRENT_TIMESTAMP"
+    )
+    cursor = conn.cursor()
+    payload = tag.copy()
+    payload["category_labels"] = json.dumps(sorted(set(tag.get("category_labels", [])))) if tag.get("category_labels") else None
+    cursor.execute(sql, payload)
+    conn.commit()
+    cursor.close()
+
+
+def get_top_vulns(conn, limit: int = 5) -> List[Dict[str, Any]]:
+    sql = (
+        "SELECT v.*, t.bio_score, t.confidence_level, t.kev_flag, t.ics_flag, t.medical_flag,"
+        " t.bio_keyword_flag, t.recent_flag, t.cvss_high_flag, t.source_count, t.conflict_flag, t.category_labels "
+        "FROM vulns v JOIN tags t ON v.cve_id = t.cve_id "
+        "ORDER BY t.bio_score DESC, v.published DESC LIMIT %s"
+    )
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(sql, (limit,))
+    rows = cursor.fetchall()
+    cursor.close()
+    for row in rows:
+        row["source_list"] = json.loads(row["source_list"]) if row.get("source_list") else []
+        row["category_labels"] = json.loads(row["category_labels"]) if row.get("category_labels") else []
+    return rows
+
+
+def search_vulns(conn, term: str, limit: int = 20) -> List[Dict[str, Any]]:
+    like_term = f"%{term}%"
+    sql = (
+        "SELECT v.*, t.bio_score, t.confidence_level, t.kev_flag, t.category_labels "
+        "FROM vulns v JOIN tags t ON v.cve_id = t.cve_id "
+        "WHERE v.cve_id LIKE %s OR v.vendor LIKE %s OR v.product LIKE %s OR v.title LIKE %s "
+        "ORDER BY t.bio_score DESC, v.published DESC LIMIT %s"
+    )
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(sql, (like_term, like_term, like_term, like_term, limit))
+    rows = cursor.fetchall()
+    cursor.close()
+    for row in rows:
+        row["source_list"] = json.loads(row["source_list"]) if row.get("source_list") else []
+        row["category_labels"] = json.loads(row["category_labels"]) if row.get("category_labels") else []
+    return rows
+
+
+def get_recent_vulns(conn, hours: int = 24, limit: int = 5) -> List[Dict[str, Any]]:
+    sql = (
+        "SELECT v.*, t.bio_score, t.confidence_level, t.kev_flag, t.ics_flag, t.medical_flag,"
+        " t.bio_keyword_flag, t.recent_flag, t.cvss_high_flag, t.source_count, t.conflict_flag, t.category_labels "
+        "FROM vulns v JOIN tags t ON v.cve_id = t.cve_id "
+        "WHERE t.last_seen >= (NOW() - INTERVAL %s HOUR) "
+        "ORDER BY t.last_seen DESC, t.bio_score DESC LIMIT %s"
+    )
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(sql, (hours, limit))
+    rows = cursor.fetchall()
+    cursor.close()
+    for row in rows:
+        row["source_list"] = json.loads(row["source_list"]) if row.get("source_list") else []
+        row["category_labels"] = json.loads(row["category_labels"]) if row.get("category_labels") else []
+    return rows
+
+
+def get_digest(conn, limit: int = 5, hours: int = 24) -> List[Dict[str, Any]]:
+    rows = get_recent_vulns(conn, hours=hours, limit=limit)
+    return rows or get_top_vulns(conn, limit=limit)
