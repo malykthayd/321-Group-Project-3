@@ -101,3 +101,259 @@ bioisac-poc/
 
 ETL writes details to `logs/etl.log` (created automatically). Review regularly for conflicts, missing data, and ingestion errors. Daily digests honor `DIGEST_LOOKBACK_HOURS` (default 24) so analysts only see fresh or recently updated CVEs.
 
+## Slack Integration
+
+### Bio-ISAC Vulnerability Intelligence Platform
+
+The Bio-ISAC Slack bot provides an enterprise-grade interface for querying vulnerability intelligence directly within Slack. Designed for security teams, analysts, and leadership, it delivers high-signal threat intelligence without disrupting workflow.
+
+All responses follow professional formatting standards with severity classification, priority indicators, and actionable recommendations.
+
+---
+
+### Slack Bot Command Reference
+
+#### `/bioisac help`
+Display comprehensive command documentation including usage patterns, examples, priority indicators, and severity classifications.
+
+**Usage:**
+```
+/bioisac help
+```
+**Use Cases:** Onboarding new team members, quick reference, understanding priority indicators and severity levels
+
+---
+
+#### `/bioisac top [n]`
+Retrieve the top N vulnerabilities ranked by bio-relevance scoring algorithm. Default limit is 5, with automatic pagination at 10 results to maintain message readability.
+
+**Usage:**
+```
+/bioisac top          # Returns top 5 vulnerabilities
+/bioisac top 10       # Returns top 10 vulnerabilities
+```
+**Parameters:**
+- `n` (optional): Number of results (default: 5, max display: 10)
+
+**Use Cases:** Daily triage, priority assessment, executive briefings
+
+---
+
+#### `/bioisac search <keyword>`
+Full-text search across CVE IDs, vendors, products, and vulnerability titles. Results are ranked by bio-relevance with automatic pagination at 10 matches.
+
+**Usage:**
+```
+/bioisac search illumina          # Search for Illumina products
+/bioisac search CVE-2024-1234     # Search specific CVE
+/bioisac search medical device    # Broad keyword search
+```
+**Parameters:**
+- `keyword` (required): Search term for vendor, product, CVE ID, or title
+
+**Use Cases:** Vendor-specific investigations, product research, CVE lookup
+
+---
+
+#### `/bioisac recent [hours]`
+Display vulnerabilities discovered or updated within a specified timeframe. Default is 24 hours with a valid range of 1-168 hours (7 days).
+
+**Usage:**
+```
+/bioisac recent           # Last 24 hours (default)
+/bioisac recent 48        # Last 48 hours
+/bioisac recent 168       # Last 7 days
+```
+**Parameters:**
+- `hours` (optional): Timeframe in hours (range: 1-168, default: 24)
+
+**Validation:** Non-integer values or out-of-range numbers return professional error messages with examples
+
+**Use Cases:** SOC operations, incident response, change management tracking
+
+---
+
+#### `/bioisac stats`
+Generate comprehensive vulnerability statistics including database metrics, severity distribution, and priority classification counts.
+
+**Usage:**
+```
+/bioisac stats
+```
+**Metrics Provided:**
+- Total vulnerabilities in database
+- Recent activity (24-hour window)
+- Severity distribution (CRITICAL/HIGH/MEDIUM/LOW)
+- Priority classifications (KEV, Medical, ICS, Bio-relevant)
+
+**Use Cases:** Management reporting, metrics dashboards, trend analysis
+
+---
+
+#### `/bioisac detail <CVE-ID>`
+Retrieve detailed intelligence report for a specific CVE identifier. Supports multiple input formats with automatic normalization.
+
+**Usage:**
+```
+/bioisac detail CVE-2024-1234     # Standard format
+/bioisac detail cve-2024-1234     # Lowercase accepted
+/bioisac detail 2024-1234         # Auto-prefixes CVE-
+```
+**Parameters:**
+- `CVE-ID` (required): CVE identifier in any standard format
+
+**Normalization:** Handles case variations, spacing, and missing prefixes automatically
+
+**Use Cases:** Deep-dive analysis, patch validation, risk assessment, incident investigation
+
+---
+
+### Response Formatting
+
+All vulnerability responses include:
+
+**Priority Indicators:**
+- `KEV` - CISA Known Exploited Vulnerability
+- `MEDICAL` - Medical device related
+- `ICS` - Industrial Control System
+- `BIO-RELEVANT` - Bio-industry keyword match
+
+**Severity Classification:**
+- ▪️ CRITICAL - CVSS 9.0-10.0
+- ▪️ HIGH - CVSS 7.0-8.9
+- ▪️ MEDIUM - CVSS 4.0-6.9
+- ▪️ LOW - CVSS 0.1-3.9
+
+**Vulnerability Cards Include:**
+- CVE identifier with severity badge
+- Priority indicators (if applicable)
+- CVSS score and affected vendor/product
+- Plain-language summary
+- Recommended action
+- Advisory links
+- Source intelligence feeds
+- Bio-relevance score (0-100)
+
+**Pagination:**
+List commands automatically truncate at 10 results with clear indication of total matches and suggestions for query refinement.
+
+---
+
+### Daily Digest
+
+The automated Daily Security Digest provides scheduled vulnerability intelligence summaries to designated Slack channels.
+
+#### Features
+
+- **Executive Summary:** High-level overview of monitoring period and priority items
+- **Smart Content:** Shows high-priority vulnerabilities from the last N hours, or top vulnerabilities if none recent
+- **Professional Format:** Consistent with interactive command responses
+- **Actionable Intelligence:** Includes recommended response protocol and next steps
+- **Statistics:** Monitoring period metrics, priority counts, KEV tracking
+
+#### Configuration
+
+**Required Environment Variables:**
+```bash
+DIGEST_CHANNEL=C01234ABCDE          # Slack channel ID for digest posts
+DIGEST_LOOKBACK_HOURS=24            # Timeframe for recent vulnerabilities (default: 24)
+```
+
+**Manual Execution:**
+```bash
+python -m src.bot.daily_digest
+```
+
+**Automated Scheduling (Heroku):**
+1. Navigate to Heroku Scheduler add-on
+2. Add new job: `python -m src.bot.daily_digest`
+3. Set frequency (recommended: daily at 8:00 AM local time)
+4. Ensure worker dyno is running
+
+**Digest Content:**
+
+*When High-Priority Items Exist:*
+- Executive summary with counts
+- Up to 10 vulnerability cards (same format as commands)
+- Recommended response protocol
+- Available analysis tools reference
+- Generation timestamp
+
+*When No High-Priority Items:*
+- "Good news" summary
+- Monitoring statistics
+- KEV tracking
+- Guidance for detailed analysis
+
+#### Use Cases
+- Daily team briefings
+- Executive reporting
+- SOC handoff documentation
+- Compliance audit trails
+
+---
+
+### Permissions & Authorization
+
+Access control is managed via environment variables:
+
+```bash
+ALLOWED_USERS=U01234ABC,U56789DEF    # Comma-separated Slack user IDs
+ALLOWED_CHANNELS=C01234ABC,C56789DEF  # Comma-separated Slack channel IDs
+```
+
+**Authorization Behavior:**
+- Empty values = no restrictions
+- Populated values = whitelist enforcement
+- Denied requests receive professional "Access Denied" message with administrator contact guidance
+
+---
+
+### Error Handling & Validation
+
+All commands include professional error handling:
+
+**Input Validation:**
+- Parameter type checking
+- Range validation with clear limits
+- Format normalization (e.g., CVE ID variations)
+
+**No Results Scenarios:**
+- Consistent "Query Result: No matching vulnerabilities found" format
+- Context-specific suggestions
+- Guidance for alternative commands
+
+**Error Messages:**
+- Professional tone without casual language
+- Clear next steps
+- Example usage patterns
+
+**Example Error Response:**
+```
+*Invalid Parameter:* Hours value `200` is out of range
+
+*Valid Range:* 1-168 hours (1 hour to 7 days)
+
+_Example:_ `/bioisac recent 48`
+```
+
+---
+
+### Best Practices
+
+**For Analysts:**
+- Start your day with `/bioisac recent` to catch new threats
+- Use `/bioisac search` for vendor-specific investigations
+- Leverage `/bioisac detail` for deep-dive analysis before escalation
+
+**For Management:**
+- Review `/bioisac stats` for metrics and reporting
+- Monitor daily digest for strategic oversight
+- Use `/bioisac top` for executive briefings
+
+**For SOC Teams:**
+- Configure alerts to post `/bioisac recent` output to incident channels
+- Document `/bioisac detail` outputs in incident tickets
+- Track KEV indicators via daily digest
+
+---
