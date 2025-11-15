@@ -475,7 +475,14 @@ _Statistics generated in real-time from production database_"""
         # Unknown command
         respond("*Error:* Unrecognized command\n\nType `/bioisac help` to view available commands")
 
-    SocketModeHandler(app, os.environ["SLACK_APP_LEVEL_TOKEN"]).start()
+    handler = SocketModeHandler(app, os.environ["SLACK_APP_LEVEL_TOKEN"])
+    try:
+        handler.start()
+    except KeyboardInterrupt:
+        print("\nBot stopped by user. Exiting gracefully...")
+    except Exception as e:
+        print(f"Error running bot: {e}")
+        raise
 
 
 if __name__ == "__main__":

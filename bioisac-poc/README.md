@@ -2,63 +2,61 @@
 
 Slack-based triage assistant that ingests NVD, CISA KEV, and EUVD data, scores bio relevance, and surfaces prioritized intel to Bio-ISAC via slash commands and daily digests.
 
-## First-Time Setup
+## Getting Started
 
-1. **Clone + enter project**  
+1. **Enter project directory and activate virtualenv:**
    ```bash
    cd bioisac-poc
+   source .venv/bin/activate  # macOS/Linux (or .\.venv\Scripts\Activate on Windows)
    ```
-2. **Create virtualenv (Python 3.11 recommended)**  
-   - macOS/Linux:  
-     ```bash
-     python3 -m venv .venv
-     source .venv/bin/activate
-     ```
-   - Windows (PowerShell):  
-     ```powershell
-     python -m venv .venv
-     .\.venv\Scripts\Activate
-     ```
-3. **Install dependencies**  
+   **First time only:** If `.venv` doesn't exist, create it:
+   ```bash
+   python3 -m venv .venv  # macOS/Linux
+   # or: python -m venv .venv  # Windows
+   source .venv/bin/activate
+   ```
+
+2. **Install dependencies** (only needed if packages are missing):
    ```bash
    pip install -r requirements.txt
    ```
-4. **Copy env template and fill values**  
+
+3. **Create `.env` file** (first time only — file persists after creation):
    ```bash
    cp .env.example .env
    ```
-   Required keys:
+   Edit `.env` and replace placeholder values with your actual credentials:
    - Slack: `SLACK_BOT_TOKEN`, `SLACK_APP_LEVEL_TOKEN`, `ALLOWED_USERS`, `ALLOWED_CHANNELS`, `DIGEST_CHANNEL`
-   - Database (JawsDB): `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`, `DB_PORT`
+   - Database: `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`, `DB_PORT`
    - Optional: `NVD_API_KEY`, `FETCH_LOOKBACK_DAYS`, `DIGEST_LOOKBACK_HOURS`, `LOG_LEVEL`
-5. **Prime the database schema**  
+   
+   **Note:** `.env` is git-ignored and won't be pushed to GitHub. Each team member creates their own `.env` file.
+
+4. **Initialize database schema** (first time only):
    ```bash
    python -m src.db_test
    ```
-6. **Pull fresh vulnerabilities (ETL)**  
+
+5. **Pull initial vulnerability data** (first time only, optional but recommended):
    ```bash
    python -m src.etl.etl_starter
    ```
-   - Default lookback is 1 day; adjust `FETCH_LOOKBACK_DAYS` before running if you want a larger window.
-7. **Run the Slack bot locally**  
+
+6. **Start the bot:**
    ```bash
    python -m src.bot.bot
    ```
-   - In Slack, test `/bioisac top 5` and `/bioisac search mitel`.  
-   - Leave the process running while you exercise commands (`Ctrl+C` to stop).
-8. **Optional manual digest**  
-   ```bash
-   python -m src.bot.daily_digest
-   ```
-   Posts the top items to the channel in `DIGEST_CHANNEL`.
+   Keep the process running to use `/bioisac` commands in Slack. Press `Ctrl+C` to stop gracefully.
+
+---
 
 ## Day-to-Day Workflow
 
-- **Refresh data** – rerun `python -m src.etl.etl_starter` to pull the latest NVD + KEV entries and recalc scores.
-- **Operate bot** – start `python -m src.bot.bot` whenever you want to use `/bioisac top [n]` or `/bioisac search <keyword>`.
-- **Send digest** – `python -m src.bot.daily_digest` posts the top list to the configured channel on demand.
-- **Health check** – `python -m src.qa.qa_smoke` confirms env vars, DB connection, and Slack auth.
-- **Change lookback window** – edit `.env` (`FETCH_LOOKBACK_DAYS`, `DIGEST_LOOKBACK_HOURS`), then rerun ETL/digest.
+### Other Common Tasks
+
+- **Refresh data** – `python -m src.etl.etl_starter` (pull latest NVD + KEV entries and recalc scores)
+- **Send digest** – `python -m src.bot.daily_digest` (post top vulnerabilities to configured channel)
+- **Health check** – `python -m src.qa.qa_smoke` (verify env vars, DB connection, Slack auth)
 
 ## What Lives Where (cheat sheet)
 
