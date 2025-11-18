@@ -31,16 +31,14 @@ def get_connection():
     load_env_once()
     
     # Prefer JAWSDB URLs if available (Heroku addon)
-    # Check for new JAWSDB instances first (JAWSDB_AMBER_URL, etc.), then standard JAWSDB_URL
-    jawsdb_url = os.environ.get("JAWSDB_AMBER_URL")  # New JAWSDB instance
+    # Prioritize upgraded JAWSDB_URL (leopard plan) over free tier instances
+    jawsdb_url = os.environ.get("JAWSDB_URL")  # Standard/upgraded JAWSDB_URL (preferred)
     if not jawsdb_url:
-        # Check for any other JAWSDB_*_URL (non-standard instances)
+        # Fall back to other JAWSDB instances (JAWSDB_AMBER_URL, etc.)
         for key in os.environ:
             if key.startswith("JAWSDB_") and key.endswith("_URL") and key != "JAWSDB_URL":
                 jawsdb_url = os.environ.get(key)
                 break
-    if not jawsdb_url:
-        jawsdb_url = os.environ.get("JAWSDB_URL")  # Standard JAWSDB_URL
     if jawsdb_url:
         # Parse JAWSDB_URL format: mysql://user:password@host:port/database
         try:
