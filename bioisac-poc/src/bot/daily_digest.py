@@ -9,15 +9,25 @@ from ..etl import queries
 from .bot import load_env, render_message
 
 
-def post_daily_digest(limit: int = 5) -> None:
+def post_daily_digest(limit: int = 10) -> None:
     load_env()
-    client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
+    try:
+        client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
+    except KeyError:
+        raise RuntimeError("SLACK_BOT_TOKEN not set in environment")
     channel = os.environ.get("DIGEST_CHANNEL") or os.environ.get("ALLOWED_CHANNELS", "").split(",")[0]
     if not channel:
         raise RuntimeError("DIGEST_CHANNEL not set")
     hours = int(os.environ.get("DIGEST_LOOKBACK_HOURS", "24"))
-    conn = queries.get_connection()
-    rows = queries.get_digest(conn, limit=limit, hours=hours)
+    try:
+        conn = queries.get_connection()
+    except Exception as e:
+        raise RuntimeError(f"Failed to connect to database: {e}")
+    try:
+        rows = queries.get_digest(conn, limit=limit, hours=hours)
+    except Exception as e:
+        conn.close()
+        raise RuntimeError(f"Failed to fetch digest data: {e}")
     
     # Get stats for the digest
     cursor = conn.cursor(dictionary=True)
@@ -32,8 +42,11 @@ def post_daily_digest(limit: int = 5) -> None:
     kev_result = cursor.fetchone()
     kev_count = kev_result["kev_count"] or 0
     
-    cursor.close()
-    conn.close()
+    try:
+        cursor.close()
+        conn.close()
+    except Exception:
+        pass
     
     if not rows:
         message = f"""*Bio-ISAC Daily Security Digest*
@@ -104,7 +117,10 @@ _This automated digest employs bio-relevance scoring algorithms calibrated for b
         
         message = header + render_message(rows, hint=False) + footer
     
-    client.chat_postMessage(channel=channel.strip(), text=message)
+    try:
+        client.chat_postMessage(channel=channel.strip(), text=message)
+    except Exception as e:
+        raise RuntimeError(f"Failed to post message to Slack: {e}")
 
 
 def main():

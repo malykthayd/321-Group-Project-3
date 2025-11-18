@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import mysql.connector
 
@@ -36,7 +36,13 @@ def get_connection():
         "database": os.environ.get("DB_NAME"),
         "port": int(os.environ.get("DB_PORT", "3306")),
     }
-    return mysql.connector.connect(**config)
+    missing = [key for key, value in config.items() if value in (None, "") and key != "port"]
+    if missing:
+        raise RuntimeError(f"Missing database configuration: {', '.join(missing)}")
+    try:
+        return mysql.connector.connect(**config)
+    except mysql.connector.Error as e:
+        raise RuntimeError(f"Database connection failed: {e}")
 
 
 def init_db(conn) -> None:
@@ -117,7 +123,7 @@ def get_top_vulns(conn, limit: int = 5) -> List[Dict[str, Any]]:
         "SELECT v.*, t.bio_score, t.confidence_level, t.kev_flag, t.ics_flag, t.medical_flag,"
         " t.bio_keyword_flag, t.recent_flag, t.cvss_high_flag, t.source_count, t.conflict_flag, t.category_labels "
         "FROM vulns v JOIN tags t ON v.cve_id = t.cve_id "
-        "ORDER BY t.bio_score DESC, v.published DESC LIMIT %s"
+        "ORDER BY t.bio_score DESC, v.cvss_base DESC, v.published DESC LIMIT %s"
     )
     cursor = conn.cursor(dictionary=True)
     cursor.execute(sql, (limit,))
@@ -132,7 +138,8 @@ def get_top_vulns(conn, limit: int = 5) -> List[Dict[str, Any]]:
 def search_vulns(conn, term: str, limit: int = 20) -> List[Dict[str, Any]]:
     like_term = f"%{term}%"
     sql = (
-        "SELECT v.*, t.bio_score, t.confidence_level, t.kev_flag, t.category_labels "
+        "SELECT v.*, t.bio_score, t.confidence_level, t.kev_flag, t.ics_flag, t.medical_flag,"
+        " t.bio_keyword_flag, t.recent_flag, t.cvss_high_flag, t.source_count, t.conflict_flag, t.category_labels "
         "FROM vulns v JOIN tags t ON v.cve_id = t.cve_id "
         "WHERE v.cve_id LIKE %s OR v.vendor LIKE %s OR v.product LIKE %s OR v.title LIKE %s "
         "ORDER BY t.bio_score DESC, v.published DESC LIMIT %s"
@@ -165,6 +172,73 @@ def get_recent_vulns(conn, hours: int = 24, limit: int = 5) -> List[Dict[str, An
     return rows
 
 
-def get_digest(conn, limit: int = 5, hours: int = 24) -> List[Dict[str, Any]]:
+def get_digest(conn, limit: int = 10, hours: int = 24) -> List[Dict[str, Any]]:
     rows = get_recent_vulns(conn, hours=hours, limit=limit)
     return rows or get_top_vulns(conn, limit=limit)
+
+
+def get_example_data(conn) -> Dict[str, Optional[str]]:
+    """Get example CVE ID and search keyword from database for help text."""
+    cursor = conn.cursor(dictionary=True)
+    
+    # Get a real CVE ID (prefer one with high bio score for better demo)
+    cursor.execute("""
+        SELECT v.cve_id FROM vulns v 
+        JOIN tags t ON v.cve_id = t.cve_id 
+        ORDER BY t.bio_score DESC, v.published DESC LIMIT 1
+    """)
+    cve_result = cursor.fetchone()
+    example_cve = cve_result["cve_id"] if cve_result else None
+    
+    # Get a real vendor or product for search example
+    # Get vendors that appear frequently for better search results
+    cursor.execute("""
+        SELECT vendor FROM vulns 
+        WHERE vendor IS NOT NULL AND vendor != '' AND LENGTH(vendor) >= 3
+        GROUP BY vendor
+        HAVING COUNT(*) >= 1
+        ORDER BY COUNT(*) DESC, vendor ASC
+        LIMIT 20
+    """)
+    vendor_results = cursor.fetchall()
+    example_keyword = None
+    
+    # Try to find a good vendor keyword
+    for row in vendor_results:
+        vendor = row["vendor"].strip()
+        if not vendor:
+            continue
+        # Use first word if multi-word, or full vendor if single word
+        words = vendor.split()
+        candidate = words[0].lower() if len(words) > 1 else vendor.lower()
+        # Skip very short or generic terms
+        if len(candidate) >= 3 and candidate not in ['the', 'and', 'for', 'inc', 'ltd', 'corp', 'llc']:
+            example_keyword = candidate
+            break
+    
+    # If no good vendor, try products
+    if not example_keyword:
+        cursor.execute("""
+            SELECT product FROM vulns 
+            WHERE product IS NOT NULL AND product != '' AND LENGTH(product) >= 3
+            GROUP BY product
+            HAVING COUNT(*) >= 1
+            ORDER BY COUNT(*) DESC, product ASC
+            LIMIT 20
+        """)
+        product_results = cursor.fetchall()
+        for row in product_results:
+            product = row["product"].strip()
+            if not product:
+                continue
+            words = product.split()
+            candidate = words[0].lower() if len(words) > 1 else product.lower()
+            if len(candidate) >= 3 and candidate not in ['the', 'and', 'for', 'inc', 'ltd', 'corp', 'llc']:
+                example_keyword = candidate
+                break
+    
+    cursor.close()
+    return {
+        "cve_id": example_cve,
+        "search_keyword": example_keyword or "vulnerability"
+    }

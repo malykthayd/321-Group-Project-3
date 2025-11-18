@@ -123,12 +123,66 @@ def _extract_vendor_product(cve: Dict) -> tuple[Optional[str], Optional[str]]:
 
 
 def _extract_advisory_url(cve: Dict) -> Optional[str]:
+    """
+    Extract advisory URL with preference for reliable sources.
+    Prioritizes: NVD, MITRE, GitHub Security Advisories, then Vendor Advisories.
+    """
     refs = cve.get("references", [])
+    if not refs:
+        return None
+    
+    # Priority order: prefer reliable, well-maintained sources
+    preferred_domains = [
+        "nvd.nist.gov",
+        "cve.mitre.org",
+        "github.com",
+        "githubusercontent.com",
+        "security-advisories.github.com",
+    ]
+    
+    # First pass: look for preferred domains
+    for ref in refs:
+        url = ref.get("url", "")
+        if any(domain in url.lower() for domain in preferred_domains):
+            return url
+    
+    # Second pass: look for Vendor Advisory (but skip known problematic patterns)
+    problematic_patterns = [
+        "/Error/",
+        "/error/",
+        "/404",
+        "/404.html",
+        "realtek.com/Error",  # Specific known issue
+    ]
+    
+    def is_problematic_url(url: str) -> bool:
+        """Check if URL looks like an error page or broken link."""
+        url_lower = url.lower()
+        return any(pattern.lower() in url_lower for pattern in problematic_patterns)
+    
     for ref in refs:
         tags = ref.get("tags") or []
         if "Vendor Advisory" in tags:
-            return ref.get("url")
+            url = ref.get("url", "")
+            # Skip if URL contains known problematic patterns
+            if url and not is_problematic_url(url):
+                return url
+    
+    # Third pass: return first reference that doesn't look problematic
+    for ref in refs:
+        url = ref.get("url", "")
+        if url and not is_problematic_url(url):
+            return url
+    
+    # Fallback: return first reference (will be replaced by NVD link in bot)
     return refs[0].get("url") if refs else None
+
+
+def _get_nvd_url(cve_id: Optional[str]) -> Optional[str]:
+    """Generate reliable NVD URL for a CVE."""
+    if not cve_id:
+        return None
+    return f"https://nvd.nist.gov/vuln/detail/{cve_id}"
 
 
 def normalize_nvd(item: Dict) -> Dict:
@@ -172,6 +226,22 @@ def normalize_nvd(item: Dict) -> Dict:
         "integrity_notes": [],
         "conflict_flag": 0,
     }
+
+
+def parse_kev_date(date_str: Optional[str]) -> Optional[dt.date]:
+    """Parse KEV date from MM/DD/YYYY format."""
+    if not date_str:
+        return None
+    try:
+        # KEV CSV uses MM/DD/YYYY format
+        return dt.datetime.strptime(date_str.strip(), "%m/%d/%Y").date()
+    except (ValueError, AttributeError):
+        # Fallback to ISO format if it's already in that format
+        try:
+            return dt.datetime.fromisoformat(date_str.strip()).date()
+        except (ValueError, AttributeError):
+            logger.warning("Could not parse KEV date: %s", date_str)
+            return None
 
 
 def normalize_kev(row: Dict) -> Dict:
@@ -235,10 +305,21 @@ def score_record(record: Dict, kev: Dict | None) -> Dict:
     recent_flag = False
     published = record.get("published")
     if published:
-        pub_date = dt.datetime.fromisoformat(str(published))
-        if (dt.datetime.utcnow() - pub_date).days <= 14:
-            recent_flag = True
-            bio_score += 1
+        try:
+            # Handle both date strings and date objects
+            if isinstance(published, str):
+                # Try ISO format first (YYYY-MM-DD or full ISO)
+                if "T" in published:
+                    pub_date = dt.datetime.fromisoformat(published.replace("Z", "+00:00"))
+                else:
+                    pub_date = dt.datetime.fromisoformat(published)
+            else:
+                pub_date = dt.datetime.fromisoformat(str(published))
+            if (dt.datetime.utcnow() - pub_date).days <= 14:
+                recent_flag = True
+                bio_score += 1
+        except (ValueError, AttributeError) as e:
+            logger.warning("Could not parse published date for CVE %s: %s", record.get("cve_id"), e)
     bio_keyword_flag = flag_keywords(description, BIO_KEYWORDS)
     if bio_keyword_flag:
         bio_score += 1
@@ -300,10 +381,28 @@ def run() -> None:
     lookback_days = int(os.environ.get("FETCH_LOOKBACK_DAYS", "7"))
     since = dt.datetime.utcnow() - dt.timedelta(days=lookback_days)
     logger.info("Fetching NVD items since %s", since.isoformat())
-    nvd_items = fetch_nvd_items(since)
-    kev_rows = {row["cveID"]: normalize_kev(row) for row in fetch_kev_items()}
-    conn = queries.get_connection()
-    queries.init_db(conn)
+    try:
+        nvd_items = fetch_nvd_items(since)
+    except Exception as e:
+        logger.error("Failed to fetch NVD items: %s", e)
+        raise
+    try:
+        kev_items = fetch_kev_items()
+        kev_rows = {row["cveID"]: normalize_kev(row) for row in kev_items}
+    except Exception as e:
+        logger.error("Failed to fetch KEV items: %s", e)
+        kev_rows = {}
+    try:
+        conn = queries.get_connection()
+    except Exception as e:
+        logger.error("Failed to connect to database: %s", e)
+        raise
+    try:
+        queries.init_db(conn)
+    except Exception as e:
+        logger.error("Failed to initialize database: %s", e)
+        conn.close()
+        raise
     loaded = 0
     for idx, item in enumerate(nvd_items, start=1):
         record = normalize_nvd(item)
@@ -320,22 +419,27 @@ def run() -> None:
         action = pick_safe_action(tags, merged, kev_data)
         if action:
             merged["safe_action"] = action
-        if merged.get("safe_action", "").lower().startswith("follow cisa kev guidance"):
+        safe_action = merged.get("safe_action") or ""
+        if safe_action.lower().startswith("follow cisa kev guidance"):
             due_date = kev_data.get("due_date") if kev_data else None
             if due_date:
-                try:
-                    due = dt.datetime.fromisoformat(due_date).date()
-                    if due < dt.datetime.utcnow().date():
-                        merged["safe_action"] = merged["safe_action"].rstrip(".") + " (overdue)."
-                except ValueError:
-                    pass
-        queries.upsert_vuln(conn, merged)
-        queries.upsert_tag(conn, tags)
-        if idx % 25 == 0:
-            logger.info("Upserted %s vulnerabilities...", idx)
-        loaded += 1
+                due = parse_kev_date(due_date)
+                if due and due < dt.datetime.utcnow().date():
+                    merged["safe_action"] = merged["safe_action"].rstrip(".") + " (overdue)."
+        try:
+            queries.upsert_vuln(conn, merged)
+            queries.upsert_tag(conn, tags)
+            if idx % 25 == 0:
+                logger.info("Upserted %s vulnerabilities...", idx)
+            loaded += 1
+        except Exception as e:
+            logger.error("Failed to upsert CVE %s: %s", cve_id, e)
+            continue
     logger.info("Loaded %s vulnerabilities", loaded)
-    conn.close()
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

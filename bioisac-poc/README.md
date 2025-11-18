@@ -4,17 +4,13 @@ Slack-based triage assistant that ingests NVD, CISA KEV, and EUVD data, scores b
 
 ## Getting Started
 
-1. **Enter project directory and activate virtualenv:**
+1. **Enter project directory and set up virtualenv:**
    ```bash
    cd bioisac-poc
-   source .venv/bin/activate  # macOS/Linux (or .\.venv\Scripts\Activate on Windows)
+   python3 -m venv .venv  # macOS/Linux (or: python -m venv .venv on Windows)
+   source .venv/bin/activate  # macOS/Linux (or: .\.venv\Scripts\Activate on Windows)
    ```
-   **First time only:** If `.venv` doesn't exist, create it:
-   ```bash
-   python3 -m venv .venv  # macOS/Linux
-   # or: python -m venv .venv  # Windows
-   source .venv/bin/activate
-   ```
+   **Note:** `.venv` is git-ignored and must be created on each machine. You only need to create it once per machine.
 
 2. **Install dependencies** (only needed if packages are missing):
    ```bash
@@ -31,16 +27,27 @@ Slack-based triage assistant that ingests NVD, CISA KEV, and EUVD data, scores b
    - Optional: `NVD_API_KEY`, `FETCH_LOOKBACK_DAYS`, `DIGEST_LOOKBACK_HOURS`, `LOG_LEVEL`
    
    **Note:** `.env` is git-ignored and won't be pushed to GitHub. Each team member creates their own `.env` file.
+   
+   **ETL Configuration:**
+   - `FETCH_LOOKBACK_DAYS` (default: 7) — How many days back to fetch modified CVEs
+     - **Initial setup:** Set to `30-90` days to build a comprehensive baseline dataset
+     - **Daily runs:** `7` days (default) is sufficient for regular updates
+     - **Weekly runs:** `14-30` days to catch updates you might have missed
 
 4. **Initialize database schema** (first time only):
    ```bash
    python -m src.db_test
    ```
 
-5. **Pull initial vulnerability data** (first time only, optional but recommended):
+5. **Pull initial vulnerability data** (first time setup):
    ```bash
    python -m src.etl.etl_starter
    ```
+   **Important:** 
+   - This fetches CVEs modified within the `FETCH_LOOKBACK_DAYS` window (default 7 days)
+   - For initial setup, set `FETCH_LOOKBACK_DAYS=30` in `.env` to build a comprehensive baseline
+   - Data persists in the database — you don't need to reload everything each time you open the project
+   - The ETL uses upsert logic, so it updates existing CVEs and adds new ones without duplicates
 
 6. **Start the bot:**
    ```bash
@@ -52,9 +59,27 @@ Slack-based triage assistant that ingests NVD, CISA KEV, and EUVD data, scores b
 
 ## Day-to-Day Workflow
 
+### Data Management
+
+**When to Run ETL:**
+- **First time:** Run once to populate the database (recommend `FETCH_LOOKBACK_DAYS=30` for initial setup)
+- **Daily/Regular:** Run to catch new CVEs and updates to existing ones (default 7-day lookback is fine)
+- **After gaps:** If you haven't run ETL in a while, run it to catch up on missed updates
+
+**ETL Behavior:**
+- The ETL is **incremental** — it updates existing CVEs and adds new ones
+- Data **persists** in your database between sessions — no need to reload everything each time
+- Uses `ON DUPLICATE KEY UPDATE`, so running ETL multiple times is safe and efficient
+- Fetches CVEs modified within the lookback window (not just new ones), so you catch updates to existing vulnerabilities
+
+**Refresh data:**
+```bash
+python -m src.etl.etl_starter
+```
+Pulls latest NVD + KEV entries, recalculates bio-relevance scores, and updates the database.
+
 ### Other Common Tasks
 
-- **Refresh data** – `python -m src.etl.etl_starter` (pull latest NVD + KEV entries and recalc scores)
 - **Send digest** – `python -m src.bot.daily_digest` (post top vulnerabilities to configured channel)
 - **Health check** – `python -m src.qa.qa_smoke` (verify env vars, DB connection, Slack auth)
 
@@ -123,15 +148,16 @@ Display comprehensive command documentation including usage patterns, examples, 
 ---
 
 #### `/bioisac top [n]`
-Retrieve the top N vulnerabilities ranked by bio-relevance scoring algorithm. Default limit is 5, with automatic pagination at 10 results to maintain message readability.
+Retrieve the top N vulnerabilities ranked by bio-relevance scoring algorithm. Default limit is 10, with support for requesting up to 100 vulnerabilities.
 
 **Usage:**
 ```
-/bioisac top          # Returns top 5 vulnerabilities
-/bioisac top 10       # Returns top 10 vulnerabilities
+/bioisac top          # Returns top 10 vulnerabilities (default)
+/bioisac top 20       # Returns top 20 vulnerabilities
+/bioisac top 50       # Returns top 50 vulnerabilities
 ```
 **Parameters:**
-- `n` (optional): Number of results (default: 5, max display: 10)
+- `n` (optional): Number of results (default: 10, max: 100)
 
 **Use Cases:** Daily triage, priority assessment, executive briefings
 
@@ -217,10 +243,10 @@ All vulnerability responses include:
 - `BIO-RELEVANT` - Bio-industry keyword match
 
 **Severity Classification:**
-- ▪️ CRITICAL - CVSS 9.0-10.0
-- ▪️ HIGH - CVSS 7.0-8.9
-- ▪️ MEDIUM - CVSS 4.0-6.9
-- ▪️ LOW - CVSS 0.1-3.9
+- 🔴 CRITICAL - CVSS 9.0-10.0 (Red)
+- 🟠 HIGH - CVSS 7.0-8.9 (Orange)
+- 🟡 MEDIUM - CVSS 4.0-6.9 (Yellow)
+- 🟢 LOW - CVSS 0.1-3.9 (Green)
 
 **Vulnerability Cards Include:**
 - CVE identifier with severity badge
@@ -230,7 +256,7 @@ All vulnerability responses include:
 - Recommended action
 - Advisory links
 - Source intelligence feeds
-- Bio-relevance score (0-100)
+- Bio-relevance score (0-10)
 
 **Pagination:**
 List commands automatically truncate at 10 results with clear indication of total matches and suggestions for query refinement.
@@ -301,9 +327,29 @@ ALLOWED_CHANNELS=C01234ABC,C56789DEF  # Comma-separated Slack channel IDs
 ```
 
 **Authorization Behavior:**
-- Empty values = no restrictions
-- Populated values = whitelist enforcement
-- Denied requests receive professional "Access Denied" message with administrator contact guidance
+- Empty values = no restrictions (anyone can use the bot)
+- Populated values = whitelist enforcement (only listed users/channels can access)
+- Denied requests receive an "Access Denied" message with instructions
+
+**How Users Can Request Access:**
+
+1. **User tries to use the bot** → Receives "Access Denied" message
+2. **User contacts administrator** → Provides their Slack user ID
+3. **Administrator adds user ID** → Updates `.env` file with user's Slack ID
+4. **Administrator restarts bot** → New permissions take effect
+
+**Finding Slack User IDs:**
+
+- **Method 1:** Right-click user in Slack → "View profile" → User ID is in the profile URL
+- **Method 2:** Ask the bot administrator to check (they can see user IDs in bot logs)
+- **Method 3:** Use Slack API or developer tools (for technical users)
+
+**Administrator Steps to Add a User:**
+
+1. Get the user's Slack user ID (format: `U01234ABC`)
+2. Edit `.env` file: `ALLOWED_USERS=U123ABC,U456DEF,U789GHI` (comma-separated, no spaces)
+3. Restart the bot: `python -m src.bot.bot`
+4. User can now access the bot
 
 ---
 

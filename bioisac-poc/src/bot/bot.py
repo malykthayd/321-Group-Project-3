@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -51,21 +52,27 @@ def _format_vendor_device(row: dict) -> str:
 
 
 def _get_severity_badge(row: dict) -> str:
-    """Return a clean severity badge based on CVSS score."""
+    """Return a clean severity badge with color coding based on CVSS score."""
     cvss = row.get("cvss_base")
     if cvss:
         if cvss >= 9.0:
-            return "▪️ CRITICAL"
+            return "🔴 CRITICAL"  # Red for critical
         elif cvss >= 7.0:
-            return "▪️ HIGH"
+            return "🟠 HIGH"  # Orange for high
         elif cvss >= 4.0:
-            return "▪️ MEDIUM"
+            return "🟡 MEDIUM"  # Yellow for medium
         else:
-            return "▪️ LOW"
+            return "🟢 LOW"  # Green for low
     severity = row.get("severity", "").upper()
-    if severity in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
-        return f"▪️ {severity}"
-    return "▪️ UNRATED"
+    if severity == "CRITICAL":
+        return "🔴 CRITICAL"
+    elif severity == "HIGH":
+        return "🟠 HIGH"
+    elif severity == "MEDIUM":
+        return "🟡 MEDIUM"
+    elif severity == "LOW":
+        return "🟢 LOW"
+    return "⚪ UNRATED"  # White/gray for unrated
 
 
 def _get_priority_indicators(row: dict) -> str:
@@ -116,10 +123,30 @@ def format_vuln(row: dict, position: Optional[int] = None) -> str:
     safe_action = row.get("safe_action") or "Review details and assess patch priority."
     lines.append(f"*Recommended Action:*\n{safe_action}")
     
-    # Advisory link
+    # Advisory links - always show NVD, optionally show vendor advisory
+    cve_id = row.get("cve_id")
     advisory = row.get("advisory_url")
-    if advisory:
-        lines.append(f"\n*Advisory:* <{advisory}|View Details>")
+    nvd_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}" if cve_id else None
+    
+    # Filter out problematic URLs (error pages, 404s, etc.)
+    def is_valid_advisory_url(url: str) -> bool:
+        """Check if advisory URL looks valid (not an error page)."""
+        if not url:
+            return False
+        url_lower = url.lower()
+        problematic_patterns = ["/error/", "/Error/", "/404", "/404.html"]
+        return not any(pattern in url_lower for pattern in problematic_patterns)
+    
+    advisory_links = []
+    if advisory and advisory != nvd_url and is_valid_advisory_url(advisory):
+        # Show vendor advisory if it exists, is different from NVD, and looks valid
+        advisory_links.append(f"<{advisory}|Vendor Advisory>")
+    if nvd_url:
+        # Always show NVD link as reliable source
+        advisory_links.append(f"<{nvd_url}|NVD Details>")
+    
+    if advisory_links:
+        lines.append(f"\n*Advisory:* {' • '.join(advisory_links)}")
     
     # Metadata footer
     metadata = []
@@ -129,7 +156,7 @@ def format_vuln(row: dict, position: Optional[int] = None) -> str:
     
     bio_score = row.get("bio_score")
     if bio_score is not None:
-        metadata.append(f"Bio-Relevance: {bio_score}/100")
+        metadata.append(f"Bio-Relevance: {bio_score}/10")
     
     if metadata:
         lines.append("")
@@ -171,7 +198,15 @@ def format_access_denied_message() -> str:
     Returns:
         Formatted professional access denied message
     """
-    return "*Access Denied:* Authorization required\n\n_Contact your Bio-ISAC administrator for access permissions_"
+    return """*Access Denied:* Authorization required
+
+To request access to the Bio-ISAC vulnerability intelligence platform:
+
+1. Contact your Bio-ISAC administrator
+2. Provide your Slack user ID (found in your Slack profile URL or by asking the admin)
+3. The administrator will add your user ID to the allowed users list
+
+_Note: Access changes require the bot to be restarted to take effect_"""
 
 
 # Maximum number of vulnerabilities to display in list responses
@@ -233,7 +268,23 @@ def main() -> None:
         
         # Help command
         if not text or text == "help":
-            help_text = """*Bio-ISAC Vulnerability Intelligence Platform*
+            # Fetch real examples from database
+            example_cve = "CVE-2024-1234"  # fallback
+            example_keyword = "vulnerability"  # fallback
+            try:
+                conn = queries.get_connection()
+                try:
+                    examples = queries.get_example_data(conn)
+                    example_cve = examples["cve_id"] or example_cve
+                    example_keyword = examples["search_keyword"] or example_keyword
+                except Exception as e:
+                    logger.warning("Failed to fetch example data for help: %s", e)
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.warning("Failed to connect to database for help examples: %s", e)
+            
+            help_text = f"""*Bio-ISAC Vulnerability Intelligence Platform*
 
 *AVAILABLE COMMANDS*
 
@@ -242,11 +293,12 @@ Display this help documentation
 
 `/bioisac top [n]`
 Retrieve top N vulnerabilities ranked by bio-relevance score
-Default: 5 vulnerabilities
+Default: 10 vulnerabilities (can request up to 100)
+Example: `/bioisac top 20` to view top 20 vulnerabilities
 
 `/bioisac search <keyword>`
 Search vulnerability database by CVE ID, vendor, product, or title
-Example: `/bioisac search illumina`
+Example: `/bioisac search {example_keyword}`
 
 `/bioisac recent [hours]`
 Display vulnerabilities discovered within specified timeframe
@@ -257,7 +309,7 @@ View comprehensive vulnerability statistics and metrics
 
 `/bioisac detail <CVE-ID>`
 Retrieve detailed information for a specific CVE identifier
-Example: `/bioisac detail CVE-2024-1234`
+Example: `/bioisac detail {example_cve}`
 
 ────────────────────────────────
 
@@ -270,10 +322,10 @@ Example: `/bioisac detail CVE-2024-1234`
 
 *SEVERITY CLASSIFICATION*
 
-▪️ CRITICAL - CVSS 9.0-10.0
-▪️ HIGH - CVSS 7.0-8.9
-▪️ MEDIUM - CVSS 4.0-6.9
-▪️ LOW - CVSS 0.1-3.9
+🔴 CRITICAL - CVSS 9.0-10.0
+🟠 HIGH - CVSS 7.0-8.9
+🟡 MEDIUM - CVSS 4.0-6.9
+🟢 LOW - CVSS 0.1-3.9
 
 ────────────────────────────────
 
@@ -284,11 +336,28 @@ _For technical support, contact your Bio-ISAC security administrator_"""
         # Top command
         if text.startswith("top"):
             parts = text.split()
-            limit = 5
-            if len(parts) >= 2 and parts[1].isdigit():
+            limit = 10  # Default changed from 5 to 10
+            if len(parts) >= 2:
+                if not parts[1].isdigit():
+                    respond("*Usage:* `/bioisac top [n]`\n\n*Valid Range:* 1-100 vulnerabilities\n\n_Example:_ `/bioisac top 20` to view top 20 vulnerabilities")
+                    return
                 limit = int(parts[1])
-            conn = queries.get_connection()
-            rows = queries.get_top_vulns(conn, limit=limit)
+                if limit < 1 or limit > 100:
+                    respond(f"*Invalid Parameter:* Number `{limit}` is out of range\n\n*Valid Range:* 1-100 vulnerabilities\n\n_Example:_ `/bioisac top 20`")
+                    return
+            try:
+                conn = queries.get_connection()
+            except Exception as e:
+                respond(f"*Database Error:* Failed to connect to database\n\n_Contact your administrator if this persists_")
+                logger.error("Database connection error in top command: %s", e)
+                return
+            try:
+                rows = queries.get_top_vulns(conn, limit=limit)
+            except Exception as e:
+                conn.close()
+                respond(f"*Database Error:* Failed to query vulnerability data\n\n_Contact your administrator if this persists_")
+                logger.error("Database query error in top command: %s", e)
+                return
             conn.close()
             if not rows:
                 respond(format_no_results_message(
@@ -298,14 +367,14 @@ _For technical support, contact your Bio-ISAC security administrator_"""
                 ))
                 return
             
-            # Apply pagination to prevent overwhelming messages
-            display_rows, truncation_footer = apply_pagination(
-                rows,
-                f"Use `/bioisac search <keyword>` to filter by vendor or product"
-            )
+            # For top command, show all requested results (no pagination truncation)
+            # But warn if they requested more than recommended
+            header = f"*Top {len(rows)} Vulnerabilities — Ranked by Bio-Relevance*\n\n"
+            footer = ""
+            if limit > 20:
+                footer = "\n\n────────────────────────────────\n\n_Note: Large result sets may be truncated by Slack. Consider using `/bioisac search <keyword>` for more focused queries._"
             
-            header = f"*Top {len(display_rows)} Vulnerabilities — Ranked by Bio-Relevance*\n\n"
-            respond(header + render_message(display_rows, hint=True) + truncation_footer)
+            respond(header + render_message(rows, hint=True) + footer)
             return
         
         # Search command
@@ -314,8 +383,19 @@ _For technical support, contact your Bio-ISAC security administrator_"""
             if not term:
                 respond("*Usage:* `/bioisac search <keyword>`\n\n_Example:_ `/bioisac search illumina`")
                 return
-            conn = queries.get_connection()
-            rows = queries.search_vulns(conn, term)
+            try:
+                conn = queries.get_connection()
+            except Exception as e:
+                respond(f"*Database Error:* Failed to connect to database\n\n_Contact your administrator if this persists_")
+                logger.error("Database connection error in search command: %s", e)
+                return
+            try:
+                rows = queries.search_vulns(conn, term)
+            except Exception as e:
+                conn.close()
+                respond(f"*Database Error:* Failed to query vulnerability data\n\n_Contact your administrator if this persists_")
+                logger.error("Database query error in search command: %s", e)
+                return
             conn.close()
             if not rows:
                 respond(format_no_results_message(
@@ -350,8 +430,19 @@ _For technical support, contact your Bio-ISAC security administrator_"""
                     respond(f"*Invalid Parameter:* Hours value `{hours}` is out of range\n\n*Valid Range:* 1-168 hours (1 hour to 7 days)\n\n_Example:_ `/bioisac recent 48`")
                     return
             
-            conn = queries.get_connection()
-            rows = queries.get_recent_vulns(conn, hours=hours, limit=20)
+            try:
+                conn = queries.get_connection()
+            except Exception as e:
+                respond(f"*Database Error:* Failed to connect to database\n\n_Contact your administrator if this persists_")
+                logger.error("Database connection error in recent command: %s", e)
+                return
+            try:
+                rows = queries.get_recent_vulns(conn, hours=hours, limit=20)
+            except Exception as e:
+                conn.close()
+                respond(f"*Database Error:* Failed to query vulnerability data\n\n_Contact your administrator if this persists_")
+                logger.error("Database query error in recent command: %s", e)
+                return
             conn.close()
             if not rows:
                 respond(format_no_results_message(
@@ -373,41 +464,59 @@ _For technical support, contact your Bio-ISAC security administrator_"""
         
         # Stats command
         if text == "stats":
-            conn = queries.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            
-            # Total count
-            cursor.execute("SELECT COUNT(*) as total FROM vulns")
-            total = cursor.fetchone()["total"]
-            
-            # By severity
-            cursor.execute("""
-                SELECT 
-                    SUM(CASE WHEN cvss_base >= 9.0 THEN 1 ELSE 0 END) as critical,
-                    SUM(CASE WHEN cvss_base >= 7.0 AND cvss_base < 9.0 THEN 1 ELSE 0 END) as high,
-                    SUM(CASE WHEN cvss_base >= 4.0 AND cvss_base < 7.0 THEN 1 ELSE 0 END) as medium,
-                    SUM(CASE WHEN cvss_base > 0 AND cvss_base < 4.0 THEN 1 ELSE 0 END) as low
-                FROM vulns
-            """)
-            severity_counts = cursor.fetchone()
-            
-            # Priority flags
-            cursor.execute("""
-                SELECT 
-                    SUM(kev_flag) as kev,
-                    SUM(medical_flag) as medical,
-                    SUM(ics_flag) as ics,
-                    SUM(bio_keyword_flag) as bio
-                FROM tags
-            """)
-            flag_counts = cursor.fetchone()
-            
-            # Recent (last 24h)
-            cursor.execute("SELECT COUNT(*) as recent FROM tags WHERE last_seen >= (NOW() - INTERVAL 24 HOUR)")
-            recent_count = cursor.fetchone()["recent"]
-            
-            cursor.close()
-            conn.close()
+            try:
+                conn = queries.get_connection()
+            except Exception as e:
+                respond(f"*Database Error:* Failed to connect to database\n\n_Contact your administrator if this persists_")
+                logger.error("Database connection error in stats command: %s", e)
+                return
+            try:
+                cursor = conn.cursor(dictionary=True)
+                
+                # Total count
+                cursor.execute("SELECT COUNT(*) as total FROM vulns")
+                total = cursor.fetchone()["total"]
+                
+                # By severity
+                cursor.execute("""
+                    SELECT 
+                        SUM(CASE WHEN cvss_base >= 9.0 THEN 1 ELSE 0 END) as critical,
+                        SUM(CASE WHEN cvss_base >= 7.0 AND cvss_base < 9.0 THEN 1 ELSE 0 END) as high,
+                        SUM(CASE WHEN cvss_base >= 4.0 AND cvss_base < 7.0 THEN 1 ELSE 0 END) as medium,
+                        SUM(CASE WHEN cvss_base > 0 AND cvss_base < 4.0 THEN 1 ELSE 0 END) as low
+                    FROM vulns
+                """)
+                severity_counts = cursor.fetchone()
+                
+                # Priority flags
+                cursor.execute("""
+                    SELECT 
+                        SUM(kev_flag) as kev,
+                        SUM(medical_flag) as medical,
+                        SUM(ics_flag) as ics,
+                        SUM(bio_keyword_flag) as bio
+                    FROM tags
+                """)
+                flag_counts = cursor.fetchone()
+                
+                # Recent (last 24h)
+                cursor.execute("SELECT COUNT(*) as recent FROM tags WHERE last_seen >= (NOW() - INTERVAL 24 HOUR)")
+                recent_count = cursor.fetchone()["recent"]
+                
+                cursor.close()
+                conn.close()
+            except Exception as e:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                respond(f"*Database Error:* Failed to query statistics\n\n_Contact your administrator if this persists_")
+                logger.error("Database query error in stats command: %s", e)
+                return
             
             stats_text = f"""*Bio-ISAC Vulnerability Intelligence — System Statistics*
 
@@ -457,8 +566,25 @@ _Statistics generated in real-time from production database_"""
             # Reconstruct canonical form
             cve_id = f"CVE-{cve_id}"
             
-            conn = queries.get_connection()
-            rows = queries.search_vulns(conn, cve_id)
+            # Validate CVE ID format: CVE-YYYY-NNNN (where NNNN is 4+ digits)
+            cve_pattern = r"^CVE-\d{4}-\d{4,}$"
+            if not re.match(cve_pattern, cve_id):
+                respond(f"*Invalid CVE Format:* `{cve_id}`\n\n*Expected Format:* CVE-YYYY-NNNN (e.g., CVE-2024-1234)\n\n_Example:_ `/bioisac detail CVE-2024-1234`")
+                return
+            
+            try:
+                conn = queries.get_connection()
+            except Exception as e:
+                respond(f"*Database Error:* Failed to connect to database\n\n_Contact your administrator if this persists_")
+                logger.error("Database connection error in detail command: %s", e)
+                return
+            try:
+                rows = queries.search_vulns(conn, cve_id)
+            except Exception as e:
+                conn.close()
+                respond(f"*Database Error:* Failed to query vulnerability data\n\n_Contact your administrator if this persists_")
+                logger.error("Database query error in detail command: %s", e)
+                return
             conn.close()
             if not rows:
                 respond(format_no_results_message(
