@@ -311,6 +311,13 @@ View comprehensive vulnerability statistics and metrics
 Retrieve detailed information for a specific CVE identifier
 Example: `/bioisac detail {example_cve}`
 
+`/bioisac digest-setup`
+Customize your daily digest preferences
+- `/bioisac digest-setup show` - View your current preferences
+- `/bioisac digest-setup set <filters>` - Configure filters (medical, ics, bio, kev, cvss-min, bio-min, limit)
+- `/bioisac digest-setup disable` - Disable custom digest
+Example: `/bioisac digest-setup set medical cvss-min:7.0`
+
 ────────────────────────────────
 
 *PRIORITY INDICATORS*
@@ -326,6 +333,12 @@ Example: `/bioisac detail {example_cve}`
 🟠 HIGH - CVSS 7.0-8.9
 🟡 MEDIUM - CVSS 4.0-6.9
 🟢 LOW - CVSS 0.1-3.9
+
+────────────────────────────────
+
+*DAILY DIGEST*
+Automated daily vulnerability summaries are posted to configured channels.
+Use `/bioisac digest-setup` to customize what appears in your personal digest.
 
 ────────────────────────────────
 
