@@ -35,3 +35,22 @@ CREATE TABLE IF NOT EXISTS tags (
   last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (cve_id) REFERENCES vulns(cve_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS digest_preferences (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  slack_user_id VARCHAR(32) NULL,
+  slack_channel_id VARCHAR(32) NULL,
+  preference_name VARCHAR(64) DEFAULT 'default',
+  medical_flag TINYINT(1) NULL,
+  ics_flag TINYINT(1) NULL,
+  bio_keyword_flag TINYINT(1) NULL,
+  kev_flag TINYINT(1) NULL,
+  min_cvss FLOAT NULL,
+  min_bio_score INT NULL,
+  limit_count INT DEFAULT 10,
+  enabled TINYINT(1) DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY unique_user_pref (slack_user_id, preference_name),
+  UNIQUE KEY unique_channel_pref (slack_channel_id, preference_name)
+);

@@ -206,7 +206,7 @@ To request access to the Bio-ISAC vulnerability intelligence platform:
 2. Provide your Slack user ID (found in your Slack profile URL or by asking the admin)
 3. The administrator will add your user ID to the allowed users list
 
-_Note: Access changes require the bot to be restarted to take effect_"""
+_Note: On Heroku, the bot restarts automatically when config vars change. For local development, restart the bot manually._"""
 
 
 # Maximum number of vulnerabilities to display in list responses
@@ -596,6 +596,192 @@ _Statistics generated in real-time from production database_"""
             # Return just the first match without numbering
             header = f"*Vulnerability Detail Report — {cve_id}*\n\n"
             respond(header + format_vuln(rows[0], position=None))
+            return
+        
+        # Digest setup command
+        if text.startswith("digest-setup") or text.startswith("digest_setup"):
+            parts = text.split()
+            if len(parts) < 2:
+                help_text = """*Daily Digest Customization*
+
+*Usage:* `/bioisac digest-setup <action> [options]`
+
+*ACTIONS:*
+
+`/bioisac digest-setup show`
+View your current digest preferences
+
+`/bioisac digest-setup set <filters>`
+Configure your digest filters
+
+*FILTER OPTIONS:*
+• `medical` - Only medical device vulnerabilities
+• `ics` - Only ICS/SCADA vulnerabilities  
+• `bio` - Only bio-keyword relevant vulnerabilities
+• `kev` - Only CISA Known Exploited Vulnerabilities
+• `cvss-min:<score>` - Minimum CVSS score (e.g., `cvss-min:7.0`)
+• `bio-min:<score>` - Minimum bio-relevance score (e.g., `bio-min:5`)
+• `limit:<n>` - Number of vulnerabilities to show (default: 10)
+
+*EXAMPLES:*
+
+`/bioisac digest-setup set medical cvss-min:7.0`
+→ Only medical device vulnerabilities with CVSS ≥ 7.0
+
+`/bioisac digest-setup set ics kev`
+→ Only ICS vulnerabilities that are in CISA KEV
+
+`/bioisac digest-setup set bio bio-min:6 limit:15`
+→ Bio-relevant vulnerabilities with score ≥ 6, show 15
+
+`/bioisac digest-setup set cvss-min:9.0`
+→ Only critical vulnerabilities (CVSS ≥ 9.0)
+
+`/bioisac digest-setup disable`
+→ Disable your personalized digest (revert to default)
+
+*NOTE:* Preferences apply to your personal digest. Channel admins can set channel-wide preferences."""
+                respond(help_text)
+                return
+            
+            action = parts[1].lower()
+            
+            try:
+                conn = queries.get_connection()
+            except Exception as e:
+                respond(f"*Database Error:* Failed to connect\n\n_Contact your administrator_")
+                logger.error("Database connection error in digest-setup: %s", e)
+                return
+            
+            try:
+                if action == "show":
+                    pref = queries.get_digest_preference(conn, user_id=user_id)
+                    if not pref:
+                        respond("*Current Preferences:* Default (no custom filters)\n\nUse `/bioisac digest-setup set` to configure filters")
+                    else:
+                        filters = []
+                        if pref.get("medical_flag"):
+                            filters.append("Medical devices")
+                        if pref.get("ics_flag"):
+                            filters.append("ICS/SCADA")
+                        if pref.get("bio_keyword_flag"):
+                            filters.append("Bio-keywords")
+                        if pref.get("kev_flag"):
+                            filters.append("CISA KEV")
+                        if pref.get("min_cvss"):
+                            filters.append(f"CVSS ≥ {pref['min_cvss']}")
+                        if pref.get("min_bio_score"):
+                            filters.append(f"Bio-score ≥ {pref['min_bio_score']}")
+                        
+                        status = "Enabled" if pref.get("enabled") else "Disabled"
+                        limit = pref.get("limit_count", 10)
+                        
+                        response = f"""*Your Digest Preferences*
+
+*Status:* {status}
+*Limit:* {limit} vulnerabilities
+*Filters:* {', '.join(filters) if filters else 'None (all vulnerabilities)'}
+
+Use `/bioisac digest-setup set` to modify"""
+                        respond(response)
+                
+                elif action == "set":
+                    # Parse filter options
+                    medical_flag = None
+                    ics_flag = None
+                    bio_keyword_flag = None
+                    kev_flag = None
+                    min_cvss = None
+                    min_bio_score = None
+                    limit_count = 10
+                    
+                    for part in parts[2:]:
+                        part_lower = part.lower()
+                        if part_lower == "medical":
+                            medical_flag = True
+                        elif part_lower == "ics":
+                            ics_flag = True
+                        elif part_lower == "bio":
+                            bio_keyword_flag = True
+                        elif part_lower == "kev":
+                            kev_flag = True
+                        elif part_lower.startswith("cvss-min:"):
+                            try:
+                                min_cvss = float(part_lower.split(":")[1])
+                            except (ValueError, IndexError):
+                                respond(f"*Invalid CVSS value:* `{part}`\n\nUse format: `cvss-min:7.0`")
+                                conn.close()
+                                return
+                        elif part_lower.startswith("bio-min:"):
+                            try:
+                                min_bio_score = int(part_lower.split(":")[1])
+                            except (ValueError, IndexError):
+                                respond(f"*Invalid bio-score value:* `{part}`\n\nUse format: `bio-min:5`")
+                                conn.close()
+                                return
+                        elif part_lower.startswith("limit:"):
+                            try:
+                                limit_count = int(part_lower.split(":")[1])
+                                if limit_count < 1 or limit_count > 50:
+                                    respond("*Invalid limit:* Must be between 1 and 50")
+                                    conn.close()
+                                    return
+                            except (ValueError, IndexError):
+                                respond(f"*Invalid limit value:* `{part}`\n\nUse format: `limit:15`")
+                                conn.close()
+                                return
+                    
+                    queries.set_digest_preference(
+                        conn, user_id=user_id,
+                        medical_flag=medical_flag,
+                        ics_flag=ics_flag,
+                        bio_keyword_flag=bio_keyword_flag,
+                        kev_flag=kev_flag,
+                        min_cvss=min_cvss,
+                        min_bio_score=min_bio_score,
+                        limit_count=limit_count,
+                        enabled=True
+                    )
+                    
+                    filters = []
+                    if medical_flag:
+                        filters.append("Medical devices")
+                    if ics_flag:
+                        filters.append("ICS/SCADA")
+                    if bio_keyword_flag:
+                        filters.append("Bio-keywords")
+                    if kev_flag:
+                        filters.append("CISA KEV")
+                    if min_cvss:
+                        filters.append(f"CVSS ≥ {min_cvss}")
+                    if min_bio_score:
+                        filters.append(f"Bio-score ≥ {min_bio_score}")
+                    
+                    response = f"""*Digest Preferences Updated*
+
+*Limit:* {limit_count} vulnerabilities
+*Filters:* {', '.join(filters) if filters else 'None (all vulnerabilities)'}
+
+Your personalized digest will use these filters starting with the next scheduled run.
+
+Use `/bioisac digest-setup show` to view your preferences"""
+                    respond(response)
+                
+                elif action == "disable":
+                    queries.set_digest_preference(conn, user_id=user_id, enabled=False)
+                    respond("*Digest Preferences Disabled*\n\nYou will receive the default digest. Use `/bioisac digest-setup set` to re-enable custom filters.")
+                
+                else:
+                    respond(f"*Unknown action:* `{action}`\n\nUse `/bioisac digest-setup` for help")
+                
+                conn.close()
+            except Exception as e:
+                try:
+                    conn.close()
+                except:
+                    pass
+                respond(f"*Error:* Failed to update preferences\n\n_Contact your administrator_")
+                logger.error("Error in digest-setup command: %s", e)
             return
         
         # Unknown command

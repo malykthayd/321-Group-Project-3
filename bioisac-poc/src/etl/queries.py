@@ -217,8 +217,60 @@ def get_recent_vulns(conn, hours: int = 24, limit: int = 5) -> List[Dict[str, An
     return rows
 
 
-def get_digest(conn, limit: int = 10, hours: int = 24) -> List[Dict[str, Any]]:
-    rows = get_recent_vulns(conn, hours=hours, limit=limit)
+def get_digest(conn, limit: int = 10, hours: int = 24, 
+               medical_flag: Optional[bool] = None,
+               ics_flag: Optional[bool] = None,
+               bio_keyword_flag: Optional[bool] = None,
+               kev_flag: Optional[bool] = None,
+               min_cvss: Optional[float] = None,
+               min_bio_score: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Get digest vulnerabilities with optional filtering."""
+    conditions = ["t.last_seen >= (NOW() - INTERVAL %s HOUR)"]
+    params = [hours]
+    
+    if medical_flag is not None:
+        conditions.append("t.medical_flag = %s")
+        params.append(1 if medical_flag else 0)
+    if ics_flag is not None:
+        conditions.append("t.ics_flag = %s")
+        params.append(1 if ics_flag else 0)
+    if bio_keyword_flag is not None:
+        conditions.append("t.bio_keyword_flag = %s")
+        params.append(1 if bio_keyword_flag else 0)
+    if kev_flag is not None:
+        conditions.append("t.kev_flag = %s")
+        params.append(1 if kev_flag else 0)
+    if min_cvss is not None:
+        conditions.append("v.cvss_base >= %s")
+        params.append(min_cvss)
+    if min_bio_score is not None:
+        conditions.append("t.bio_score >= %s")
+        params.append(min_bio_score)
+    
+    where_clause = " AND ".join(conditions)
+    sql = (
+        f"SELECT v.*, t.bio_score, t.confidence_level, t.kev_flag, t.ics_flag, t.medical_flag,"
+        f" t.bio_keyword_flag, t.recent_flag, t.cvss_high_flag, t.source_count, t.conflict_flag, t.category_labels "
+        f"FROM vulns v JOIN tags t ON v.cve_id = t.cve_id "
+        f"WHERE {where_clause} "
+        f"ORDER BY t.bio_score DESC, v.cvss_base DESC, v.published DESC LIMIT %s"
+    )
+    params.append(limit)
+    
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    cursor.close()
+    
+    for row in rows:
+        row["source_list"] = json.loads(row["source_list"]) if row.get("source_list") else []
+        row["category_labels"] = json.loads(row["category_labels"]) if row.get("category_labels") else []
+    
+    # If no results with filters, fall back to top vulns (without filters)
+    if not rows and any([medical_flag is not None, ics_flag is not None, bio_keyword_flag is not None, 
+                        kev_flag is not None, min_cvss is not None, min_bio_score is not None]):
+        return get_top_vulns(conn, limit=limit)
+    
     return rows or get_top_vulns(conn, limit=limit)
 
 
@@ -287,3 +339,91 @@ def get_example_data(conn) -> Dict[str, Optional[str]]:
         "cve_id": example_cve,
         "search_keyword": example_keyword or "vulnerability"
     }
+
+
+def get_digest_preference(conn, user_id: Optional[str] = None, channel_id: Optional[str] = None, 
+                         preference_name: str = "default") -> Optional[Dict[str, Any]]:
+    """Get digest preference for a user or channel."""
+    cursor = conn.cursor(dictionary=True)
+    if user_id:
+        cursor.execute("""
+            SELECT * FROM digest_preferences 
+            WHERE slack_user_id = %s AND preference_name = %s AND enabled = 1
+            ORDER BY updated_at DESC LIMIT 1
+        """, (user_id, preference_name))
+    elif channel_id:
+        cursor.execute("""
+            SELECT * FROM digest_preferences 
+            WHERE slack_channel_id = %s AND preference_name = %s AND enabled = 1
+            ORDER BY updated_at DESC LIMIT 1
+        """, (channel_id, preference_name))
+    else:
+        cursor.close()
+        return None
+    
+    result = cursor.fetchone()
+    cursor.close()
+    return result
+
+
+def set_digest_preference(conn, user_id: Optional[str] = None, channel_id: Optional[str] = None,
+                          preference_name: str = "default",
+                          medical_flag: Optional[bool] = None,
+                          ics_flag: Optional[bool] = None,
+                          bio_keyword_flag: Optional[bool] = None,
+                          kev_flag: Optional[bool] = None,
+                          min_cvss: Optional[float] = None,
+                          min_bio_score: Optional[int] = None,
+                          limit_count: int = 10,
+                          enabled: bool = True) -> None:
+    """Set or update digest preference for a user or channel."""
+    cursor = conn.cursor()
+    
+    # Check if preference exists
+    if user_id:
+        cursor.execute("""
+            SELECT id FROM digest_preferences 
+            WHERE slack_user_id = %s AND preference_name = %s
+        """, (user_id, preference_name))
+    else:
+        cursor.execute("""
+            SELECT id FROM digest_preferences 
+            WHERE slack_channel_id = %s AND preference_name = %s
+        """, (channel_id, preference_name))
+    
+    existing = cursor.fetchone()
+    
+    if existing:
+        # Update existing
+        cursor.execute("""
+            UPDATE digest_preferences SET
+                medical_flag = %s, ics_flag = %s, bio_keyword_flag = %s, kev_flag = %s,
+                min_cvss = %s, min_bio_score = %s, limit_count = %s, enabled = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (medical_flag, ics_flag, bio_keyword_flag, kev_flag, 
+              min_cvss, min_bio_score, limit_count, 1 if enabled else 0, existing[0]))
+    else:
+        # Insert new
+        cursor.execute("""
+            INSERT INTO digest_preferences 
+            (slack_user_id, slack_channel_id, preference_name, medical_flag, ics_flag, 
+             bio_keyword_flag, kev_flag, min_cvss, min_bio_score, limit_count, enabled)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (user_id, channel_id, preference_name, medical_flag, ics_flag, 
+              bio_keyword_flag, kev_flag, min_cvss, min_bio_score, limit_count, 1 if enabled else 0))
+    
+    conn.commit()
+    cursor.close()
+
+
+def get_all_digest_preferences(conn, enabled_only: bool = True) -> List[Dict[str, Any]]:
+    """Get all digest preferences (for batch processing)."""
+    cursor = conn.cursor(dictionary=True)
+    if enabled_only:
+        cursor.execute("SELECT * FROM digest_preferences WHERE enabled = 1")
+    else:
+        cursor.execute("SELECT * FROM digest_preferences")
+    results = cursor.fetchall()
+    cursor.close()
+    return results
