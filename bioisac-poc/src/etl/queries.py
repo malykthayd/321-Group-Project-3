@@ -29,16 +29,63 @@ def load_env_once() -> None:
 
 def get_connection():
     load_env_once()
-    config = {
-        "host": os.environ.get("DB_HOST"),
-        "user": os.environ.get("DB_USER"),
-        "password": os.environ.get("DB_PASS"),
-        "database": os.environ.get("DB_NAME"),
-        "port": int(os.environ.get("DB_PORT", "3306")),
-    }
-    missing = [key for key, value in config.items() if value in (None, "") and key != "port"]
-    if missing:
-        raise RuntimeError(f"Missing database configuration: {', '.join(missing)}")
+    
+    # Prefer JAWSDB URLs if available (Heroku addon)
+    # Check for new JAWSDB instances first (JAWSDB_AMBER_URL, etc.), then standard JAWSDB_URL
+    jawsdb_url = os.environ.get("JAWSDB_AMBER_URL")  # New JAWSDB instance
+    if not jawsdb_url:
+        # Check for any other JAWSDB_*_URL (non-standard instances)
+        for key in os.environ:
+            if key.startswith("JAWSDB_") and key.endswith("_URL") and key != "JAWSDB_URL":
+                jawsdb_url = os.environ.get(key)
+                break
+    if not jawsdb_url:
+        jawsdb_url = os.environ.get("JAWSDB_URL")  # Standard JAWSDB_URL
+    if jawsdb_url:
+        # Parse JAWSDB_URL format: mysql://user:password@host:port/database
+        try:
+            # Remove mysql:// prefix
+            url = jawsdb_url.replace("mysql://", "")
+            # Split into user:pass@host:port/db
+            if "@" in url:
+                auth_part, rest = url.split("@", 1)
+                user, password = auth_part.split(":", 1)
+                if "/" in rest:
+                    host_port, database = rest.split("/", 1)
+                else:
+                    host_port = rest
+                    database = ""
+                if ":" in host_port:
+                    host, port = host_port.split(":", 1)
+                    port = int(port)
+                else:
+                    host = host_port
+                    port = 3306
+                
+                config = {
+                    "host": host,
+                    "user": user,
+                    "password": password,
+                    "database": database,
+                    "port": port,
+                }
+            else:
+                raise ValueError("Invalid JAWSDB_URL format")
+        except (ValueError, AttributeError) as e:
+            raise RuntimeError(f"Failed to parse JAWSDB_URL: {e}")
+    else:
+        # Fall back to individual environment variables
+        config = {
+            "host": os.environ.get("DB_HOST"),
+            "user": os.environ.get("DB_USER"),
+            "password": os.environ.get("DB_PASS"),
+            "database": os.environ.get("DB_NAME"),
+            "port": int(os.environ.get("DB_PORT", "3306")),
+        }
+        missing = [key for key, value in config.items() if value in (None, "") and key != "port"]
+        if missing:
+            raise RuntimeError(f"Missing database configuration: {', '.join(missing)}")
+    
     try:
         return mysql.connector.connect(**config)
     except mysql.connector.Error as e:
