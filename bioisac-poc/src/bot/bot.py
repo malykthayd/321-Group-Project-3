@@ -98,7 +98,8 @@ def format_vuln(row: dict, position: Optional[int] = None) -> str:
     
     # Header with position number
     prefix = f"*{position}.*  " if position is not None else ""
-    header = f"{prefix}*{row['cve_id']}*  {severity_badge}"
+    cve_id = row.get("cve_id") or "Unknown CVE"
+    header = f"{prefix}*{cve_id}*  {severity_badge}"
     
     # Add priority indicators if any
     if priority_indicators:
@@ -124,9 +125,8 @@ def format_vuln(row: dict, position: Optional[int] = None) -> str:
     lines.append(f"*Recommended Action:*\n{safe_action}")
     
     # Advisory links - always show NVD, optionally show vendor advisory
-    cve_id = row.get("cve_id")
     advisory = row.get("advisory_url")
-    nvd_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}" if cve_id else None
+    nvd_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}" if cve_id and cve_id != "Unknown CVE" else None
     
     # Filter out problematic URLs (error pages, 404s, etc.)
     def is_valid_advisory_url(url: str) -> bool:
@@ -150,7 +150,10 @@ def format_vuln(row: dict, position: Optional[int] = None) -> str:
     
     # Metadata footer
     metadata = []
-    sources = ", ".join(row.get("source_list", []))
+    source_list = row.get("source_list") or []
+    if not isinstance(source_list, list):
+        source_list = []
+    sources = ", ".join(source_list) if source_list else ""
     if sources:
         metadata.append(f"Sources: {sources}")
     
