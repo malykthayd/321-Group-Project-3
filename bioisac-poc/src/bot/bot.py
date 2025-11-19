@@ -63,15 +63,17 @@ def _get_severity_badge(row: dict) -> str:
             return "🟡 MEDIUM"  # Yellow for medium
         else:
             return "🟢 LOW"  # Green for low
-    severity = row.get("severity", "").upper()
-    if severity == "CRITICAL":
-        return "🔴 CRITICAL"
-    elif severity == "HIGH":
-        return "🟠 HIGH"
-    elif severity == "MEDIUM":
-        return "🟡 MEDIUM"
-    elif severity == "LOW":
-        return "🟢 LOW"
+    severity = row.get("severity") or ""
+    if severity:
+        severity = severity.upper()
+        if severity == "CRITICAL":
+            return "🔴 CRITICAL"
+        elif severity == "HIGH":
+            return "🟠 HIGH"
+        elif severity == "MEDIUM":
+            return "🟡 MEDIUM"
+        elif severity == "LOW":
+            return "🟢 LOW"
     return "⚪ UNRATED"  # White/gray for unrated
 
 
