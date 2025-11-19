@@ -288,35 +288,47 @@ def main() -> None:
 
 *AVAILABLE COMMANDS*
 
-`/bioisac help`
+*`/bioisac help`*
 Display this help documentation
 
-`/bioisac top [n]`
+────────────────────────────────
+
+*`/bioisac top [n]`*
 Retrieve top N vulnerabilities ranked by bio-relevance score
-Default: 10 vulnerabilities (can request up to 100)
-Example: `/bioisac top 20` to view top 20 vulnerabilities
+• Default: 10 vulnerabilities (can request up to 100)
+• Example: `/bioisac top 20` to view top 20 vulnerabilities
 
-`/bioisac search <keyword>`
+────────────────────────────────
+
+*`/bioisac search <keyword>`*
 Search vulnerability database by CVE ID, vendor, product, or title
-Example: `/bioisac search {example_keyword}`
+• Example: `/bioisac search {example_keyword}`
 
-`/bioisac recent [hours]`
+────────────────────────────────
+
+*`/bioisac recent [hours]`*
 Display vulnerabilities discovered within specified timeframe
-Default: 24 hours
+• Default: 24 hours
 
-`/bioisac stats`
+────────────────────────────────
+
+*`/bioisac stats`*
 View comprehensive vulnerability statistics and metrics
 
-`/bioisac detail <CVE-ID>`
-Retrieve detailed information for a specific CVE identifier
-Example: `/bioisac detail {example_cve}`
+────────────────────────────────
 
-`/bioisac digest-setup`
+*`/bioisac detail <CVE-ID>`*
+Retrieve detailed information for a specific CVE identifier
+• Example: `/bioisac detail {example_cve}`
+
+────────────────────────────────
+
+*`/bioisac digest-setup`*
 Customize your daily digest preferences
-- `/bioisac digest-setup show` - View your current preferences
-- `/bioisac digest-setup set <filters>` - Configure filters (medical, ics, bio, kev, cvss-min, bio-min, limit)
-- `/bioisac digest-setup disable` - Disable custom digest
-Example: `/bioisac digest-setup set medical cvss-min:7.0`
+• `/bioisac digest-setup show` - View your current preferences
+• `/bioisac digest-setup set <filters>` - Configure filters (medical, ics, bio, kev, cvss-min, bio-min, limit)
+• `/bioisac digest-setup disable` - Disable custom digest
+• Example: `/bioisac digest-setup set medical cvss-min:7.0`
 
 ────────────────────────────────
 
