@@ -692,18 +692,19 @@ Configure your digest filters
             
             try:
                 if action == "show":
-                    pref = queries.get_digest_preference(conn, user_id=user_id)
+                    pref = queries.get_digest_preference(conn, user_id=user_id, preference_name="default")
                     if not pref:
                         respond("*Current Preferences:* Default (no custom filters)\n\nUse `/bioisac digest-setup set` to configure filters")
                     else:
                         filters = []
-                        if pref.get("medical_flag"):
+                        # Check boolean flags (MySQL TINYINT(1) returns as 0/1, not bool)
+                        if pref.get("medical_flag") == 1:
                             filters.append("Medical devices")
-                        if pref.get("ics_flag"):
+                        if pref.get("ics_flag") == 1:
                             filters.append("ICS/SCADA")
-                        if pref.get("bio_keyword_flag"):
+                        if pref.get("bio_keyword_flag") == 1:
                             filters.append("Bio-keywords")
-                        if pref.get("kev_flag"):
+                        if pref.get("kev_flag") == 1:
                             filters.append("CISA KEV")
                         if pref.get("min_cvss"):
                             filters.append(f"CVSS ≥ {pref['min_cvss']}")
@@ -769,7 +770,7 @@ Use `/bioisac digest-setup set` to modify"""
                                 return
                     
                     queries.set_digest_preference(
-                        conn, user_id=user_id,
+                        conn, user_id=user_id, preference_name="default",
                         medical_flag=medical_flag,
                         ics_flag=ics_flag,
                         bio_keyword_flag=bio_keyword_flag,

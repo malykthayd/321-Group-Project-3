@@ -420,6 +420,12 @@ def set_digest_preference(conn, user_id: Optional[str] = None, channel_id: Optio
     
     existing = cursor.fetchone()
     
+    # Convert boolean flags to integers (1/0) for MySQL TINYINT
+    medical_flag_int = 1 if medical_flag else (0 if medical_flag is False else None)
+    ics_flag_int = 1 if ics_flag else (0 if ics_flag is False else None)
+    bio_keyword_flag_int = 1 if bio_keyword_flag else (0 if bio_keyword_flag is False else None)
+    kev_flag_int = 1 if kev_flag else (0 if kev_flag is False else None)
+    
     if existing:
         # Update existing
         cursor.execute("""
@@ -428,7 +434,7 @@ def set_digest_preference(conn, user_id: Optional[str] = None, channel_id: Optio
                 min_cvss = %s, min_bio_score = %s, limit_count = %s, enabled = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
-        """, (medical_flag, ics_flag, bio_keyword_flag, kev_flag, 
+        """, (medical_flag_int, ics_flag_int, bio_keyword_flag_int, kev_flag_int, 
               min_cvss, min_bio_score, limit_count, 1 if enabled else 0, existing[0]))
     else:
         # Insert new
@@ -437,8 +443,8 @@ def set_digest_preference(conn, user_id: Optional[str] = None, channel_id: Optio
             (slack_user_id, slack_channel_id, preference_name, medical_flag, ics_flag, 
              bio_keyword_flag, kev_flag, min_cvss, min_bio_score, limit_count, enabled)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (user_id, channel_id, preference_name, medical_flag, ics_flag, 
-              bio_keyword_flag, kev_flag, min_cvss, min_bio_score, limit_count, 1 if enabled else 0))
+        """, (user_id, channel_id, preference_name, medical_flag_int, ics_flag_int, 
+              bio_keyword_flag_int, kev_flag_int, min_cvss, min_bio_score, limit_count, 1 if enabled else 0))
     
     conn.commit()
     cursor.close()
