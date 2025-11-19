@@ -442,49 +442,54 @@ _For technical support, contact your Bio-ISAC security administrator_"""
         
         # Recent command
         if text.startswith("recent"):
-            parts = text.split()
-            hours = 24  # Default
-            
-            # Validate hours parameter if provided
-            if len(parts) >= 2:
-                if not parts[1].isdigit():
-                    respond("*Usage:* `/bioisac recent [hours]`\n\n*Valid Range:* 1-168 hours (1 hour to 7 days)\n\n_Example:_ `/bioisac recent 48` to view vulnerabilities from the last 48 hours")
-                    return
-                hours = int(parts[1])
-                if hours < 1 or hours > 168:
-                    respond(f"*Invalid Parameter:* Hours value `{hours}` is out of range\n\n*Valid Range:* 1-168 hours (1 hour to 7 days)\n\n_Example:_ `/bioisac recent 48`")
-                    return
-            
+            logger.info("Recent command received: text=%s", text)
             try:
-                conn = queries.get_connection()
-            except Exception as e:
-                respond(f"*Database Error:* Failed to connect to database\n\n_Contact your administrator if this persists_")
-                logger.error("Database connection error in recent command: %s", e)
-                return
-            try:
-                rows = queries.get_recent_vulns(conn, hours=hours, limit=20)
-            except Exception as e:
+                parts = text.split()
+                hours = 24  # Default
+                
+                # Validate hours parameter if provided
+                if len(parts) >= 2:
+                    if not parts[1].isdigit():
+                        respond("*Usage:* `/bioisac recent [hours]`\n\n*Valid Range:* 1-168 hours (1 hour to 7 days)\n\n_Example:_ `/bioisac recent 48` to view vulnerabilities from the last 48 hours")
+                        return
+                    hours = int(parts[1])
+                    if hours < 1 or hours > 168:
+                        respond(f"*Invalid Parameter:* Hours value `{hours}` is out of range\n\n*Valid Range:* 1-168 hours (1 hour to 7 days)\n\n_Example:_ `/bioisac recent 48`")
+                        return
+                
+                try:
+                    conn = queries.get_connection()
+                except Exception as e:
+                    respond(f"*Database Error:* Failed to connect to database\n\n_Contact your administrator if this persists_")
+                    logger.error("Database connection error in recent command: %s", e)
+                    return
+                try:
+                    rows = queries.get_recent_vulns(conn, hours=hours, limit=20)
+                except Exception as e:
+                    conn.close()
+                    respond(f"*Database Error:* Failed to query vulnerability data\n\n_Contact your administrator if this persists_")
+                    logger.error("Database query error in recent command: %s", e)
+                    return
                 conn.close()
-                respond(f"*Database Error:* Failed to query vulnerability data\n\n_Contact your administrator if this persists_")
-                logger.error("Database query error in recent command: %s", e)
-                return
-            conn.close()
-            if not rows:
-                respond(format_no_results_message(
-                    "Timeframe Query",
-                    f"Last {hours} hours",
-                    "Try expanding the timeframe or use `/bioisac top` to view all vulnerabilities"
-                ))
-                return
-            
-            # Apply pagination to prevent overwhelming messages
-            display_rows, truncation_footer = apply_pagination(
-                rows,
-                f"Narrow the timeframe with `/bioisac recent <hours>` to see more focused results"
-            )
-            
-            header = f"*Recent Vulnerabilities — Last {hours} Hours*\n{len(display_rows)} of {len(rows)} entries shown\n\n"
-            respond(header + render_message(display_rows, hint=False) + truncation_footer)
+                if not rows:
+                    respond(format_no_results_message(
+                        "Timeframe Query",
+                        f"Last {hours} hours",
+                        "Try expanding the timeframe or use `/bioisac top` to view all vulnerabilities"
+                    ))
+                    return
+                
+                # Apply pagination to prevent overwhelming messages
+                display_rows, truncation_footer = apply_pagination(
+                    rows,
+                    f"Narrow the timeframe with `/bioisac recent <hours>` to see more focused results"
+                )
+                
+                header = f"*Recent Vulnerabilities — Last {hours} Hours*\n{len(display_rows)} of {len(rows)} entries shown\n\n"
+                respond(header + render_message(display_rows, hint=False) + truncation_footer)
+            except Exception as e:
+                respond(f"*Error:* An unexpected error occurred while processing the recent command\n\n_Contact your administrator if this persists_")
+                logger.error("Unexpected error in recent command: %s", e, exc_info=True)
             return
         
         # Stats command
