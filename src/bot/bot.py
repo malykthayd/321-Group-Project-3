@@ -498,7 +498,9 @@ _For technical support, contact your Bio-ISAC security administrator_"""
                 header = f"*Recent Vulnerabilities — Last {hours} Hours*\n{len(display_rows)} of {len(rows)} entries shown\n\n"
                 respond(header + render_message(display_rows, hint=False) + truncation_footer)
             except Exception as e:
-                respond(f"*Error:* An unexpected error occurred while processing the recent command\n\n_Contact your administrator if this persists_")
+                error_msg = str(e)
+                error_type = type(e).__name__
+                respond(f"*Error:* An unexpected error occurred while processing the recent command\n\n*Error Type:* `{error_type}`\n*Details:* `{error_msg}`\n\n_Contact your administrator if this persists_")
                 logger.error("Unexpected error in recent command: %s", e, exc_info=True)
             return
         

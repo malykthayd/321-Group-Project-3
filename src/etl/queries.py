@@ -212,8 +212,35 @@ def get_recent_vulns(conn, hours: int = 24, limit: int = 5) -> List[Dict[str, An
     rows = cursor.fetchall()
     cursor.close()
     for row in rows:
-        row["source_list"] = json.loads(row["source_list"]) if row.get("source_list") else []
-        row["category_labels"] = json.loads(row["category_labels"]) if row.get("category_labels") else []
+        # Safely parse source_list
+        source_list = row.get("source_list")
+        if source_list:
+            if isinstance(source_list, str):
+                try:
+                    row["source_list"] = json.loads(source_list)
+                except (json.JSONDecodeError, TypeError):
+                    row["source_list"] = []
+            elif isinstance(source_list, (list, dict)):
+                row["source_list"] = source_list
+            else:
+                row["source_list"] = []
+        else:
+            row["source_list"] = []
+        
+        # Safely parse category_labels
+        category_labels = row.get("category_labels")
+        if category_labels:
+            if isinstance(category_labels, str):
+                try:
+                    row["category_labels"] = json.loads(category_labels)
+                except (json.JSONDecodeError, TypeError):
+                    row["category_labels"] = []
+            elif isinstance(category_labels, (list, dict)):
+                row["category_labels"] = category_labels
+            else:
+                row["category_labels"] = []
+        else:
+            row["category_labels"] = []
     return rows
 
 
