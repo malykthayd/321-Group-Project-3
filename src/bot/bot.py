@@ -30,6 +30,75 @@ def parse_allow_list(value: str) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def parse_digest_time(time_str: str) -> Optional[str]:
+    """Parse time string in various formats and return HH:MM:SS format.
+    
+    Supports:
+    - 24-hour: "09:00", "14:30", "9:00"
+    - 12-hour: "9:00 AM", "2:30 PM", "09:00am"
+    
+    Returns None if invalid format.
+    """
+    import re
+    from datetime import datetime
+    
+    time_str = time_str.strip().upper()
+    
+    # Try 12-hour format (e.g., "9:00 AM", "2:30 PM")
+    am_pm_match = re.match(r'(\d{1,2}):(\d{2})\s*(AM|PM)', time_str)
+    if am_pm_match:
+        hour = int(am_pm_match.group(1))
+        minute = int(am_pm_match.group(2))
+        period = am_pm_match.group(3)
+        
+        if hour < 1 or hour > 12 or minute < 0 or minute > 59:
+            return None
+        
+        if period == "PM" and hour != 12:
+            hour += 12
+        elif period == "AM" and hour == 12:
+            hour = 0
+        
+        return f"{hour:02d}:{minute:02d}:00"
+    
+    # Try 24-hour format (e.g., "09:00", "14:30", "9:00")
+    time_match = re.match(r'(\d{1,2}):(\d{2})', time_str)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2))
+        
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            return None
+        
+        return f"{hour:02d}:{minute:02d}:00"
+    
+    return None
+
+
+def format_digest_time(time_str: Optional[str]) -> str:
+    """Format time string from HH:MM:SS to readable 12-hour format."""
+    if not time_str:
+        return "Not set (uses default schedule)"
+    
+    try:
+        from datetime import datetime
+        # Parse HH:MM:SS or HH:MM
+        parts = time_str.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1])
+        
+        if hour == 0:
+            return f"12:{minute:02d} AM"
+        elif hour < 12:
+            return f"{hour}:{minute:02d} AM"
+        elif hour == 12:
+            return f"12:{minute:02d} PM"
+        else:
+            return f"{hour - 12}:{minute:02d} PM"
+    except (ValueError, IndexError):
+        return time_str
+
+
 def ensure_authorized(user_id: str, channel_id: str) -> None:
     allowed_users = parse_allow_list(os.environ.get("ALLOWED_USERS", ""))
     allowed_channels = parse_allow_list(os.environ.get("ALLOWED_CHANNELS", ""))
@@ -336,11 +405,15 @@ Retrieve detailed information for a specific CVE identifier
 ────────────────────────────────
 
 *`/bioisac digest-setup`*
-Customize your daily digest preferences
+Customize your daily digest preferences and delivery time
 • `/bioisac digest-setup show` - View your current preferences
-• `/bioisac digest-setup set <filters>` - Configure filters (medical, ics, bio, kev, cvss-min, bio-min, limit)
+• `/bioisac digest-setup set <filters>` - Configure filters and time
+  - Filter options: `medical`, `ics`, `bio`, `kev`, `cvss-min:<score>`, `bio-min:<score>`, `limit:<n>`
+  - Time option: `time:<HH:MM>` - Set when you receive your digest (must be top of hour, e.g., `time:9:00 AM` or `time:14:00`)
 • `/bioisac digest-setup disable` - Disable custom digest
-• Example: `/bioisac digest-setup set medical cvss-min:7.0`
+• Examples:
+  - `/bioisac digest-setup set medical cvss-min:7.0 time:9:00 AM` - Medical devices, CVSS ≥7.0, at 9 AM
+  - `/bioisac digest-setup set time:14:00` - Set digest time to 2 PM (no filters)
 
 ────────────────────────────────
 
@@ -666,6 +739,7 @@ Configure your digest filters
 • `cvss-min:<score>` - Minimum CVSS score (e.g., `cvss-min:7.0`)
 • `bio-min:<score>` - Minimum bio-relevance score (e.g., `bio-min:5`)
 • `limit:<n>` - Number of vulnerabilities to show (default: 10)
+• `time:<HH:MM>` - Daily digest time (must be top of hour, e.g., `time:9:00 AM` or `time:14:00`)
 
 *EXAMPLES:*
 
@@ -681,10 +755,19 @@ Configure your digest filters
 `/bioisac digest-setup set cvss-min:9.0`
 → Only critical vulnerabilities (CVSS ≥ 9.0)
 
+`/bioisac digest-setup set time:9:00 AM`
+→ Set digest to send at 9:00 AM daily (must be top of hour)
+
+`/bioisac digest-setup set medical time:14:00`
+→ Medical device vulnerabilities, sent at 2:00 PM daily (must be top of hour)
+
 `/bioisac digest-setup disable`
 → Disable your personalized digest (revert to default)
 
-*NOTE:* Preferences apply to your personal digest. Channel admins can set channel-wide preferences."""
+*NOTE:* 
+• Time must be set to the top of the hour (:00), e.g., `9:00 AM` or `14:00` (not `9:05 AM` or `14:30`)
+• Time preferences require Heroku Scheduler to run hourly (contact admin to configure)
+• Preferences apply to your personal digest. Channel admins can set channel-wide preferences."""
                 respond(help_text)
                 return
             
@@ -720,10 +803,12 @@ Configure your digest filters
                         
                         status = "Enabled" if pref.get("enabled") else "Disabled"
                         limit = pref.get("limit_count", 10)
+                        digest_time = format_digest_time(pref.get("digest_time"))
                         
                         response = f"""*Your Digest Preferences*
 
 *Status:* {status}
+*Time:* {digest_time}
 *Limit:* {limit} vulnerabilities
 *Filters:* {', '.join(filters) if filters else 'None (all vulnerabilities)'}
 
@@ -739,8 +824,24 @@ Use `/bioisac digest-setup set` to modify"""
                     min_cvss = None
                     min_bio_score = None
                     limit_count = 10
+                    digest_time = None
                     
-                    for part in parts[2:]:
+                    # Reconstruct time string if it contains spaces (e.g., "9:00 AM")
+                    reconstructed_parts = []
+                    i = 2
+                    while i < len(parts):
+                        if parts[i].lower().startswith("time:"):
+                            # Check if next part is AM/PM
+                            time_part = parts[i]
+                            if i + 1 < len(parts) and parts[i + 1].upper() in ["AM", "PM"]:
+                                time_part = f"{parts[i]} {parts[i + 1]}"
+                                i += 1
+                            reconstructed_parts.append(time_part)
+                        else:
+                            reconstructed_parts.append(parts[i])
+                        i += 1
+                    
+                    for part in reconstructed_parts:
                         part_lower = part.lower()
                         if part_lower == "medical":
                             medical_flag = True
@@ -775,6 +876,20 @@ Use `/bioisac digest-setup set` to modify"""
                                 respond(f"*Invalid limit value:* `{part}`\n\nUse format: `limit:15`")
                                 conn.close()
                                 return
+                        elif part_lower.startswith("time:"):
+                            time_value = part[5:].strip()  # Remove "time:" prefix
+                            parsed_time = parse_digest_time(time_value)
+                            if parsed_time is None:
+                                respond(f"*Invalid time format:* `{time_value}`\n\nUse 24-hour (e.g., `time:09:00`) or 12-hour (e.g., `time:9:00 AM`) format. Time must be at the top of the hour (:00).")
+                                conn.close()
+                                return
+                            # Validate that time is at top of hour (:00)
+                            time_parts = parsed_time.split(":")
+                            if len(time_parts) >= 2 and int(time_parts[1]) != 0:
+                                respond(f"*Invalid time:* `{time_value}`\n\nTime must be set to the top of the hour (:00). Use times like `9:00 AM` or `14:00`, not `9:05 AM` or `14:30`.")
+                                conn.close()
+                                return
+                            digest_time = parsed_time
                     
                     queries.set_digest_preference(
                         conn, user_id=user_id, preference_name="default",
@@ -785,6 +900,7 @@ Use `/bioisac digest-setup set` to modify"""
                         min_cvss=min_cvss,
                         min_bio_score=min_bio_score,
                         limit_count=limit_count,
+                        digest_time=digest_time,
                         enabled=True
                     )
                     
@@ -802,12 +918,17 @@ Use `/bioisac digest-setup set` to modify"""
                     if min_bio_score:
                         filters.append(f"Bio-score ≥ {min_bio_score}")
                     
+                    time_display = format_digest_time(digest_time)
+                    
                     response = f"""*Digest Preferences Updated*
 
+*Time:* {time_display}
 *Limit:* {limit_count} vulnerabilities
 *Filters:* {', '.join(filters) if filters else 'None (all vulnerabilities)'}
 
-Your personalized digest will use these filters starting with the next scheduled run.
+Your personalized digest will use these settings starting with the next scheduled run.
+
+_Note: Time must be at the top of the hour (:00). Time preferences require Heroku Scheduler to run hourly. Contact your admin if digests aren't arriving at the specified time._
 
 Use `/bioisac digest-setup show` to view your preferences"""
                     respond(response)

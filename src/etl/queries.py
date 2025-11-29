@@ -402,6 +402,7 @@ def set_digest_preference(conn, user_id: Optional[str] = None, channel_id: Optio
                           min_cvss: Optional[float] = None,
                           min_bio_score: Optional[int] = None,
                           limit_count: int = 10,
+                          digest_time: Optional[str] = None,
                           enabled: bool = True) -> None:
     """Set or update digest preference for a user or channel."""
     cursor = conn.cursor()
@@ -427,24 +428,55 @@ def set_digest_preference(conn, user_id: Optional[str] = None, channel_id: Optio
     kev_flag_int = 1 if kev_flag else (0 if kev_flag is False else None)
     
     if existing:
-        # Update existing
-        cursor.execute("""
-            UPDATE digest_preferences SET
-                medical_flag = %s, ics_flag = %s, bio_keyword_flag = %s, kev_flag = %s,
-                min_cvss = %s, min_bio_score = %s, limit_count = %s, enabled = %s,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = %s
-        """, (medical_flag_int, ics_flag_int, bio_keyword_flag_int, kev_flag_int, 
-              min_cvss, min_bio_score, limit_count, 1 if enabled else 0, existing[0]))
+        # Update existing - only update fields that are not None
+        update_fields = []
+        update_values = []
+        
+        if medical_flag is not None:
+            update_fields.append("medical_flag = %s")
+            update_values.append(medical_flag_int)
+        if ics_flag is not None:
+            update_fields.append("ics_flag = %s")
+            update_values.append(ics_flag_int)
+        if bio_keyword_flag is not None:
+            update_fields.append("bio_keyword_flag = %s")
+            update_values.append(bio_keyword_flag_int)
+        if kev_flag is not None:
+            update_fields.append("kev_flag = %s")
+            update_values.append(kev_flag_int)
+        if min_cvss is not None:
+            update_fields.append("min_cvss = %s")
+            update_values.append(min_cvss)
+        if min_bio_score is not None:
+            update_fields.append("min_bio_score = %s")
+            update_values.append(min_bio_score)
+        if limit_count is not None:
+            update_fields.append("limit_count = %s")
+            update_values.append(limit_count)
+        if digest_time is not None:
+            update_fields.append("digest_time = %s")
+            update_values.append(digest_time)
+        # Always update enabled and updated_at
+        update_fields.append("enabled = %s")
+        update_values.append(1 if enabled else 0)
+        update_fields.append("updated_at = CURRENT_TIMESTAMP")
+        
+        if update_fields:
+            update_values.append(existing[0])
+            cursor.execute(f"""
+                UPDATE digest_preferences SET
+                    {', '.join(update_fields)}
+                WHERE id = %s
+            """, update_values)
     else:
         # Insert new
         cursor.execute("""
             INSERT INTO digest_preferences 
             (slack_user_id, slack_channel_id, preference_name, medical_flag, ics_flag, 
-             bio_keyword_flag, kev_flag, min_cvss, min_bio_score, limit_count, enabled)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             bio_keyword_flag, kev_flag, min_cvss, min_bio_score, limit_count, digest_time, enabled)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (user_id, channel_id, preference_name, medical_flag_int, ics_flag_int, 
-              bio_keyword_flag_int, kev_flag_int, min_cvss, min_bio_score, limit_count, 1 if enabled else 0))
+              bio_keyword_flag_int, kev_flag_int, min_cvss, min_bio_score, limit_count, digest_time, 1 if enabled else 0))
     
     conn.commit()
     cursor.close()

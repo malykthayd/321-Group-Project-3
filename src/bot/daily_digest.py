@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 
 from slack_sdk import WebClient
 
@@ -12,7 +13,6 @@ from .bot import load_env, render_message
 def format_digest_message(rows: list, hours: int, recent_count: int, kev_count: int, 
                           custom_filters: str = "") -> str:
     """Format digest message with optional custom filter description."""
-    from datetime import datetime
     
     if not rows:
         message = f"""*Bio-ISAC Daily Security Digest*
@@ -101,6 +101,11 @@ def post_daily_digest(limit: int = 10, use_preferences: bool = True) -> None:
     
     hours = int(os.environ.get("DIGEST_LOOKBACK_HOURS", "24"))
     
+    # Get current time for time-based filtering
+    current_time = datetime.now()
+    current_hour = current_time.hour
+    current_minute = current_time.minute
+    
     try:
         conn = queries.get_connection()
     except Exception as e:
@@ -127,6 +132,27 @@ def post_daily_digest(limit: int = 10, use_preferences: bool = True) -> None:
         # Send personalized digests
         for pref in preferences:
             try:
+                # Check if this preference has a time set and if it matches current time
+                digest_time = pref.get("digest_time")
+                if digest_time:
+                    # Parse time string (HH:MM:SS or HH:MM)
+                    try:
+                        time_parts = str(digest_time).split(":")
+                        pref_hour = int(time_parts[0])
+                        pref_minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+                        
+                        # Only send if current hour and minute match (within 5 minute window for scheduler flexibility)
+                        time_diff = abs((current_hour * 60 + current_minute) - (pref_hour * 60 + pref_minute))
+                        if time_diff > 5:  # Allow 5 minute window for scheduler timing
+                            continue  # Skip this preference, not the right time
+                    except (ValueError, IndexError):
+                        # Invalid time format, skip this preference
+                        continue
+                else:
+                    # User has preferences but no time set - skip personalized digest
+                    # They'll get the default channel digest instead
+                    continue
+                
                 # Build filter description
                 filter_parts = []
                 if pref.get("medical_flag"):
@@ -174,18 +200,29 @@ def post_daily_digest(limit: int = 10, use_preferences: bool = True) -> None:
         conn.close()
         
         # Also send default digest to default channel if configured
-        default_channel = os.environ.get("DIGEST_CHANNEL") or os.environ.get("ALLOWED_CHANNELS", "").split(",")[0]
-        if default_channel:
-            try:
-                conn = queries.get_connection()
-                rows = queries.get_digest(conn, limit=limit, hours=hours)
-                message = format_digest_message(rows, hours, recent_count, kev_count)
-                conn.close()
-                client.chat_postMessage(channel=default_channel.strip(), text=message)
-            except Exception as e:
-                print(f"Failed to send default digest: {e}")
+        # Only send once per day (at a specific default time, e.g., 9:00 AM)
+        default_digest_time = int(os.environ.get("DEFAULT_DIGEST_HOUR", "8"))  # Default to 8 AM
+        if current_hour == default_digest_time and current_minute < 5:  # Only send at default time (within 5 min window)
+            default_channel = os.environ.get("DIGEST_CHANNEL") or os.environ.get("ALLOWED_CHANNELS", "").split(",")[0]
+            if default_channel:
+                try:
+                    conn = queries.get_connection()
+                    rows = queries.get_digest(conn, limit=limit, hours=hours)
+                    message = format_digest_message(rows, hours, recent_count, kev_count)
+                    conn.close()
+                    client.chat_postMessage(channel=default_channel.strip(), text=message)
+                except Exception as e:
+                    print(f"Failed to send default digest: {e}")
     else:
         # Legacy behavior: send to default channel only
+        # Only send once per day (at a specific default time, e.g., 8:00 AM)
+        default_digest_time = int(os.environ.get("DEFAULT_DIGEST_HOUR", "8"))  # Default to 8 AM
+        
+        if current_hour != default_digest_time or current_minute >= 5:
+            # Not the right time for default digest, skip
+            conn.close()
+            return
+        
         channel = os.environ.get("DIGEST_CHANNEL") or os.environ.get("ALLOWED_CHANNELS", "").split(",")[0]
         if not channel:
             conn.close()

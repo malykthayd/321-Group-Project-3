@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS digest_preferences (
   min_cvss FLOAT NULL,
   min_bio_score INT NULL,
   limit_count INT DEFAULT 10,
+  digest_time TIME NULL,
   enabled TINYINT(1) DEFAULT 1,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
