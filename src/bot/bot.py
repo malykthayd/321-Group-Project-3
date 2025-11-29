@@ -406,14 +406,17 @@ Retrieve detailed information for a specific CVE identifier
 
 *`/bioisac digest-setup`*
 Customize your daily digest preferences and delivery time
-• `/bioisac digest-setup show` - View your current preferences
-• `/bioisac digest-setup set <filters>` - Configure filters and time
-  - Filter options: `medical`, `ics`, `bio`, `kev`, `cvss-min:<score>`, `bio-min:<score>`, `limit:<n>`
-  - Time option: `time:<HH:MM>` - Set when you receive your digest (must be top of hour, e.g., `time:9:00 AM` or `time:14:00`)
-• `/bioisac digest-setup disable` - Disable custom digest
-• Examples:
-  - `/bioisac digest-setup set medical cvss-min:7.0 time:9:00 AM` - Medical devices, CVSS ≥7.0, at 9 AM
-  - `/bioisac digest-setup set time:14:00` - Set digest time to 2 PM (no filters)
+
+*Commands:*
+• `show` - View current preferences
+• `set <options>` - Configure filters and time
+• `disable` - Disable personalized digest
+
+*Quick Examples:*
+• `/bioisac digest-setup set medical cvss-min:7.0 time:9:00 AM`
+• `/bioisac digest-setup set time:14:00`
+
+_Note: Time must be at top of hour (`:00`). Use `/bioisac digest-setup` for full help._
 
 ────────────────────────────────
 
@@ -721,53 +724,74 @@ _Statistics generated in real-time from production database_"""
             if len(parts) < 2:
                 help_text = """*Daily Digest Customization*
 
-*Usage:* `/bioisac digest-setup <action> [options]`
+────────────────────────────────
 
-*ACTIONS:*
+*COMMANDS*
 
 `/bioisac digest-setup show`
-View your current digest preferences
+View your current preferences
 
-`/bioisac digest-setup set <filters>`
-Configure your digest filters
-
-*FILTER OPTIONS:*
-• `medical` - Only medical device vulnerabilities
-• `ics` - Only ICS/SCADA vulnerabilities  
-• `bio` - Only bio-keyword relevant vulnerabilities
-• `kev` - Only CISA Known Exploited Vulnerabilities
-• `cvss-min:<score>` - Minimum CVSS score (e.g., `cvss-min:7.0`)
-• `bio-min:<score>` - Minimum bio-relevance score (e.g., `bio-min:5`)
-• `limit:<n>` - Number of vulnerabilities to show (default: 10)
-• `time:<HH:MM>` - Daily digest time (must be top of hour, e.g., `time:9:00 AM` or `time:14:00`)
-
-*EXAMPLES:*
-
-`/bioisac digest-setup set medical cvss-min:7.0`
-→ Only medical device vulnerabilities with CVSS ≥ 7.0
-
-`/bioisac digest-setup set ics kev`
-→ Only ICS vulnerabilities that are in CISA KEV
-
-`/bioisac digest-setup set bio bio-min:6 limit:15`
-→ Bio-relevant vulnerabilities with score ≥ 6, show 15
-
-`/bioisac digest-setup set cvss-min:9.0`
-→ Only critical vulnerabilities (CVSS ≥ 9.0)
-
-`/bioisac digest-setup set time:9:00 AM`
-→ Set digest to send at 9:00 AM daily (must be top of hour)
-
-`/bioisac digest-setup set medical time:14:00`
-→ Medical device vulnerabilities, sent at 2:00 PM daily (must be top of hour)
+`/bioisac digest-setup set <options>`
+Configure filters and delivery time
 
 `/bioisac digest-setup disable`
-→ Disable your personalized digest (revert to default)
+Disable personalized digest
 
-*NOTE:* 
-• Time must be set to the top of the hour (:00), e.g., `9:00 AM` or `14:00` (not `9:05 AM` or `14:30`)
-• Time preferences require Heroku Scheduler to run hourly (contact admin to configure)
-• Preferences apply to your personal digest. Channel admins can set channel-wide preferences."""
+────────────────────────────────
+
+*FILTER OPTIONS*
+
+*Category Filters:*
+• `medical` - Medical device vulnerabilities only
+• `ics` - ICS/SCADA vulnerabilities only
+• `bio` - Bio-keyword relevant only
+• `kev` - CISA Known Exploited Vulnerabilities only
+
+*Score Filters:*
+• `cvss-min:<score>` - Minimum CVSS (e.g., `cvss-min:7.0`)
+• `bio-min:<score>` - Minimum bio-relevance (e.g., `bio-min:5`)
+
+*Other Options:*
+• `limit:<n>` - Number of items to show (default: 10)
+• `time:<HH:MM>` - Delivery time (must be top of hour)
+
+────────────────────────────────
+
+*TIME SETTING*
+
+Set when you receive your digest:
+• Format: `time:9:00 AM` or `time:14:00`
+• Must be at top of hour (`:00`)
+• Examples: `time:9:00 AM`, `time:14:00`, `time:17:00`
+
+────────────────────────────────
+
+*EXAMPLES*
+
+*Filter Examples:*
+`/bioisac digest-setup set medical cvss-min:7.0`
+→ Medical devices with CVSS ≥ 7.0
+
+`/bioisac digest-setup set ics kev`
+→ ICS vulnerabilities in CISA KEV
+
+`/bioisac digest-setup set bio bio-min:6 limit:15`
+→ Bio-relevant (score ≥ 6), show 15 items
+
+*Time Examples:*
+`/bioisac digest-setup set time:9:00 AM`
+→ Set delivery time to 9:00 AM
+
+`/bioisac digest-setup set medical time:14:00`
+→ Medical devices, delivered at 2:00 PM
+
+────────────────────────────────
+
+*IMPORTANT NOTES*
+
+• Time must be at top of hour (`:00`) - not `9:05 AM` or `14:30`
+• Requires hourly scheduler (contact admin if issues)
+• Preferences are personal - channel admins can set channel-wide preferences"""
                 respond(help_text)
                 return
             
