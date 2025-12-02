@@ -4,6 +4,13 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Fallback for Python < 3.9
+    from dateutil.tz import gettz
+    ZoneInfo = lambda tz: gettz(tz)
+
 from slack_sdk import WebClient
 
 from ..etl import queries
@@ -101,10 +108,10 @@ def post_daily_digest(limit: int = 10, use_preferences: bool = True) -> None:
     
     hours = int(os.environ.get("DIGEST_LOOKBACK_HOURS", "24"))
     
-    # Get current time for time-based filtering
-    current_time = datetime.now()
-    current_hour = current_time.hour
-    current_minute = current_time.minute
+    # Get current time for time-based filtering (UTC)
+    current_time_utc = datetime.now(ZoneInfo("UTC"))
+    current_hour = current_time_utc.hour
+    current_minute = current_time_utc.minute
     
     try:
         conn = queries.get_connection()
@@ -200,10 +207,21 @@ def post_daily_digest(limit: int = 10, use_preferences: bool = True) -> None:
         conn.close()
         
         # Also send default digest to default channel if configured
-        # Only send once per day (at a specific default time, e.g., 9:00 AM)
-        default_digest_time = int(os.environ.get("DEFAULT_DIGEST_HOUR", "8"))  # Default to 8 AM
-        if current_hour == default_digest_time and current_minute < 5:  # Only send at default time (within 5 min window)
-            default_channel = os.environ.get("DIGEST_CHANNEL") or os.environ.get("ALLOWED_CHANNELS", "").split(",")[0]
+        # Only send once per day (at a specific default time, e.g., 8:00 AM CST)
+        # Convert CST hour to UTC: 8am CST = 14:00 UTC (standard) or 13:00 UTC (daylight)
+        default_digest_hour_cst = int(os.environ.get("DEFAULT_DIGEST_HOUR", "8"))  # Default to 8 AM CST
+        
+        # Get current time in CST and create target time for digest
+        current_time_cst = current_time_utc.astimezone(ZoneInfo("America/Chicago"))
+        # Create a datetime for the target hour in CST today and convert to UTC
+        # This automatically handles CST (UTC-6) vs CDT (UTC-5) transitions
+        target_cst = current_time_cst.replace(hour=default_digest_hour_cst, minute=0, second=0, microsecond=0)
+        target_utc = target_cst.astimezone(ZoneInfo("UTC"))
+        target_utc_hour = target_utc.hour
+        
+        if current_hour == target_utc_hour and current_minute < 5:  # Only send at default time (within 5 min window)
+            # ONLY use DIGEST_CHANNEL - do not fall back to ALLOWED_CHANNELS
+            default_channel = os.environ.get("DIGEST_CHANNEL")
             if default_channel:
                 try:
                     conn = queries.get_connection()
@@ -215,15 +233,25 @@ def post_daily_digest(limit: int = 10, use_preferences: bool = True) -> None:
                     print(f"Failed to send default digest: {e}")
     else:
         # Legacy behavior: send to default channel only
-        # Only send once per day (at a specific default time, e.g., 8:00 AM)
-        default_digest_time = int(os.environ.get("DEFAULT_DIGEST_HOUR", "8"))  # Default to 8 AM
+        # Only send once per day (at a specific default time, e.g., 8:00 AM CST)
+        # Convert CST hour to UTC: 8am CST = 14:00 UTC (standard) or 13:00 UTC (daylight)
+        default_digest_hour_cst = int(os.environ.get("DEFAULT_DIGEST_HOUR", "8"))  # Default to 8 AM CST
         
-        if current_hour != default_digest_time or current_minute >= 5:
+        # Get current time in CST and create target time for digest
+        current_time_cst = current_time_utc.astimezone(ZoneInfo("America/Chicago"))
+        # Create a datetime for the target hour in CST today and convert to UTC
+        # This automatically handles CST (UTC-6) vs CDT (UTC-5) transitions
+        target_cst = current_time_cst.replace(hour=default_digest_hour_cst, minute=0, second=0, microsecond=0)
+        target_utc = target_cst.astimezone(ZoneInfo("UTC"))
+        target_utc_hour = target_utc.hour
+        
+        if current_hour != target_utc_hour or current_minute >= 5:
             # Not the right time for default digest, skip
             conn.close()
             return
         
-        channel = os.environ.get("DIGEST_CHANNEL") or os.environ.get("ALLOWED_CHANNELS", "").split(",")[0]
+        # ONLY use DIGEST_CHANNEL - do not fall back to ALLOWED_CHANNELS
+        channel = os.environ.get("DIGEST_CHANNEL")
         if not channel:
             conn.close()
             raise RuntimeError("DIGEST_CHANNEL not set")
