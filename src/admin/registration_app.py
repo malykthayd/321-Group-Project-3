@@ -953,53 +953,69 @@ def admin_dashboard():
 @admin_required
 def admin_approve(request_id):
     """Approve an access request."""
-    req = get_request_by_id(request_id)
-    if not req:
-        flash("Request not found.", "error")
+    try:
+        req = get_request_by_id(request_id)
+        if not req:
+            flash("Request not found.", "error")
+            return redirect(url_for("admin_dashboard"))
+        
+        if req["status"] != "pending":
+            flash("Request has already been processed.", "warning")
+            return redirect(url_for("admin_dashboard"))
+        
+        # Try to look up Slack ID if not provided
+        slack_id = req.get("slack_id")
+        if not slack_id:
+            try:
+                user = lookup_slack_user_by_email(req["email"])
+                if user:
+                    slack_id = user.get("id")
+            except Exception as e:
+                # If lookup fails, continue without Slack ID
+                pass
+        
+        if not slack_id:
+            flash(f"Cannot approve: No Slack ID found for {req['email']}. Please add their Slack ID manually.", "error")
+            return redirect(url_for("admin_dashboard"))
+        
+        # Add to Heroku
+        heroku_success = add_user_to_heroku(slack_id)
+        
+        # Update request status
+        try:
+            update_request_status(request_id, "approved", "admin")
+        except Exception as e:
+            flash(f"Error updating request status: {str(e)}", "error")
+            return redirect(url_for("admin_dashboard"))
+        
+        if heroku_success:
+            flash(f"✅ Approved {req['full_name']} and added {slack_id} to Heroku ALLOWED_USERS.", "success")
+        else:
+            flash(f"✅ Approved {req['full_name']}. Note: Could not auto-update Heroku. Please add {slack_id} manually.", "warning")
+        
         return redirect(url_for("admin_dashboard"))
-    
-    if req["status"] != "pending":
-        flash("Request has already been processed.", "warning")
+    except Exception as e:
+        flash(f"Error approving request: {str(e)}", "error")
         return redirect(url_for("admin_dashboard"))
-    
-    # Try to look up Slack ID if not provided
-    slack_id = req.get("slack_id")
-    if not slack_id:
-        user = lookup_slack_user_by_email(req["email"])
-        if user:
-            slack_id = user.get("id")
-    
-    if not slack_id:
-        flash(f"Cannot approve: No Slack ID found for {req['email']}. Please add their Slack ID manually.", "error")
-        return redirect(url_for("admin_dashboard"))
-    
-    # Add to Heroku
-    heroku_success = add_user_to_heroku(slack_id)
-    
-    # Update request status
-    update_request_status(request_id, "approved", "admin")
-    
-    if heroku_success:
-        flash(f"✅ Approved {req['full_name']} and added {slack_id} to Heroku ALLOWED_USERS.", "success")
-    else:
-        flash(f"✅ Approved {req['full_name']}. Note: Could not auto-update Heroku. Please add {slack_id} manually.", "warning")
-    
-    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/deny/<int:request_id>", methods=["POST"])
 @admin_required
 def admin_deny(request_id):
     """Deny an access request."""
-    req = get_request_by_id(request_id)
-    if not req:
-        flash("Request not found.", "error")
+    try:
+        req = get_request_by_id(request_id)
+        if not req:
+            flash("Request not found.", "error")
+            return redirect(url_for("admin_dashboard"))
+        
+        update_request_status(request_id, "denied", "admin")
+        flash(f"Request from {req['full_name']} has been denied.", "success")
+        
         return redirect(url_for("admin_dashboard"))
-    
-    update_request_status(request_id, "denied", "admin")
-    flash(f"Request from {req['full_name']} has been denied.", "success")
-    
-    return redirect(url_for("admin_dashboard"))
+    except Exception as e:
+        flash(f"Error denying request: {str(e)}", "error")
+        return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/health")
