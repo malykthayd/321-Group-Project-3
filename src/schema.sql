@@ -55,3 +55,19 @@ CREATE TABLE IF NOT EXISTS digest_preferences (
   UNIQUE KEY unique_user_pref (slack_user_id, preference_name),
   UNIQUE KEY unique_channel_pref (slack_channel_id, preference_name)
 );
+
+-- User access requests for self-service registration
+CREATE TABLE IF NOT EXISTS user_requests (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  full_name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  organization VARCHAR(255),
+  slack_id VARCHAR(32),
+  reason TEXT,
+  status ENUM('pending', 'approved', 'denied') DEFAULT 'pending',
+  admin_notes TEXT,
+  requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at TIMESTAMP NULL,
+  reviewed_by VARCHAR(255),
+  UNIQUE KEY unique_email_pending (email, status)
+);
