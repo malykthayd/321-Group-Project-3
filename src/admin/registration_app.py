@@ -243,6 +243,30 @@ def lookup_slack_user_by_email(email: str) -> Optional[Dict]:
     return None
 
 
+def invite_user_to_channel(user_id: str, channel_id: str) -> bool:
+    """Invite a user to a Slack channel."""
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token:
+        return False
+    
+    try:
+        response = requests.post(
+            "https://slack.com/api/conversations.invite",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "channel": channel_id,
+                "users": user_id
+            }
+        )
+        data = response.json()
+        return data.get("ok", False)
+    except Exception:
+        return False
+
+
 # =============================================================================
 # Auth Decorator
 # =============================================================================
@@ -981,6 +1005,16 @@ def admin_approve(request_id):
         # Add to Heroku
         heroku_success = add_user_to_heroku(slack_id)
         
+        # Invite to Bio-ISAC channel if configured
+        channel_invited = False
+        bioisac_channel = os.environ.get("BIOISAC_CHANNEL") or os.environ.get("DIGEST_CHANNEL")
+        if bioisac_channel:
+            try:
+                channel_invited = invite_user_to_channel(slack_id, bioisac_channel)
+            except Exception:
+                # If invitation fails, continue anyway
+                pass
+        
         # Update request status
         try:
             update_request_status(request_id, "approved", "admin")
@@ -988,8 +1022,11 @@ def admin_approve(request_id):
             flash(f"Error updating request status: {str(e)}", "error")
             return redirect(url_for("admin_dashboard"))
         
-        if heroku_success:
-            flash(f"✅ Approved {req['full_name']} and added {slack_id} to Heroku ALLOWED_USERS.", "success")
+        # Build success message
+        if heroku_success and channel_invited:
+            flash(f"✅ Approved {req['full_name']} and added {slack_id} to Heroku ALLOWED_USERS. User has been invited to the Bio-ISAC channel.", "success")
+        elif heroku_success:
+            flash(f"✅ Approved {req['full_name']} and added {slack_id} to Heroku ALLOWED_USERS. Note: Could not invite to channel (channel may not be configured).", "warning")
         else:
             flash(f"✅ Approved {req['full_name']}. Note: Could not auto-update Heroku. Please add {slack_id} manually.", "warning")
         
