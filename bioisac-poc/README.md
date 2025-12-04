@@ -631,120 +631,134 @@ heroku run "python -m src.admin.user_manager sync-channel C01234ABCDE --app bioi
 
 ---
 
+## Self-Service Registration Portal
+
+The Bio-ISAC bot includes a web-based registration portal where users can request access.
+
+### Features
+
+- **Public Registration Form:** Users submit their name, email, organization, Slack ID, and reason for access
+- **Admin Dashboard:** Review, approve, or deny requests with one click
+- **Automatic Heroku Updates:** Approved users are automatically added to `ALLOWED_USERS`
+- **Slack Notifications:** Get notified in an admin channel when new requests arrive
+- **Email-to-Slack Lookup:** Automatically finds Slack IDs from email addresses
+
+### Setup
+
+1. **Scale the web dyno:**
+   ```bash
+   heroku ps:scale web=1 --app your-app-name
+   ```
+
+2. **Configure environment variables:**
+   ```bash
+   # Required
+   ADMIN_PASSWORD=your-secure-password      # For admin dashboard login
+   
+   # Optional (for enhanced features)
+   ADMIN_NOTIFICATION_CHANNEL=C01234ABCDE   # Slack channel for new request alerts
+   HEROKU_API_KEY=your-heroku-api-key       # For automatic config updates
+   HEROKU_APP_NAME=your-app-name            # Target Heroku app
+   ```
+
+3. **Initialize the database table:**
+   ```bash
+   heroku run "python -m src.db_test" --app your-app-name
+   ```
+
+### Usage
+
+- **Registration Form:** `https://your-app-name.herokuapp.com/register`
+- **Admin Dashboard:** `https://your-app-name.herokuapp.com/admin`
+
+### Workflow
+
+1. User visits `/register` and submits their information
+2. Admin receives notification in Slack (if configured)
+3. Admin logs into `/admin` dashboard
+4. Admin reviews request and clicks "Approve" or "Deny"
+5. If approved, user is automatically added to Heroku `ALLOWED_USERS`
+6. Heroku restarts the bot with updated permissions
+
+---
+
+## Automated Channel Join Detection
+
+The bot can automatically add users to `ALLOWED_USERS` when they join the Bio-ISAC channel.
+
+### Setup
+
+Set these environment variables:
+
+```bash
+BIOISAC_CHANNEL=C01234ABCDE           # The channel to monitor
+AUTO_ADD_CHANNEL_MEMBERS=true          # Enable automatic addition
+ADMIN_NOTIFICATION_CHANNEL=C01234ABCDE # Optional: notify when users are added
+```
+
+### How It Works
+
+1. User is invited to or joins the Bio-ISAC channel
+2. Bot detects the `member_joined_channel` event
+3. Bot automatically adds the user's Slack ID to Heroku `ALLOWED_USERS`
+4. Admin is notified (if configured)
+5. User can immediately start using `/bioisac` commands
+
+---
+
+## Admin Slack Commands
+
+Administrators can manage users directly from Slack using `/bioisac admin` commands.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/bioisac admin` | Show admin help |
+| `/bioisac admin add-user U01234ABC` | Add a user to ALLOWED_USERS |
+| `/bioisac admin remove-user U01234ABC` | Remove a user from ALLOWED_USERS |
+| `/bioisac admin list-users` | List all authorized users |
+| `/bioisac admin sync-channel` | Sync all channel members to ALLOWED_USERS |
+
+### Setup
+
+1. **Configure admin users:**
+   ```bash
+   ADMIN_USERS=U01234ABC,U56789DEF   # Comma-separated Slack user IDs
+   ```
+   If not set, all allowed users can use admin commands.
+
+2. **Configure Heroku access:**
+   ```bash
+   HEROKU_API_KEY=your-api-key
+   HEROKU_APP_NAME=your-app-name
+   ```
+
+### Example Usage
+
+```
+/bioisac admin sync-channel
+🔄 Syncing channel #bioisac-alerts...
+
+✅ Sync Complete
+• Added 3 new users
+• Total authorized: 15
+
+New users:
+• U0ABC123
+• U0DEF456
+• U0GHI789
+
+Heroku will automatically restart with updated permissions.
+```
+
+---
+
 ## Potential Possibilities (Future Enhancements)
 
-This section documents potential features that could be implemented in future iterations.
+This section documents additional features that could be implemented in future iterations.
 
-### Self-Service User Registration Form
-
-**Concept:** A web-based form where users can request access to the Bio-ISAC bot.
-
-**User Flow:**
-1. User visits registration form (e.g., hosted on Heroku or a simple web service)
-2. User enters their information:
-   - Full Name
-   - Email Address
-   - Organization/Company
-   - Slack ID (with instructions on how to find it)
-   - Reason for access / Use case
-3. Form submits to a database or sends notification to administrator
-4. Administrator (Whitney) reviews the request
-5. If approved:
-   - Administrator invites user to the Slack channel using their email
-   - Administrator adds their Slack ID using the existing admin tools (or form auto-adds)
-6. User receives confirmation
-
-**Technical Implementation Options:**
-
-*Option A: Simple Google Form + Spreadsheet*
-- No coding required
-- Google Form collects user info
-- Results go to Google Sheet
-- Administrator manually reviews and processes
-
-*Option B: Flask Web App on Heroku*
-- Add a simple Flask app with registration form
-- Store requests in database (could reuse existing MySQL)
-- Admin dashboard to view and approve requests
-- Automatic Heroku config var update on approval
-
-*Option C: Slack Workflow Integration*
-- Use Slack Workflow Builder to create a request form
-- Form results posted to admin channel
-- Admin reacts to approve/deny
-- Could trigger automatic user addition via bot response
-
-**Database Schema (if implementing Option B):**
-
-```sql
-CREATE TABLE user_requests (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    full_name VARCHAR(255) NOT NULL,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    organization VARCHAR(255),
-    slack_id VARCHAR(20),
-    reason TEXT,
-    status ENUM('pending', 'approved', 'denied') DEFAULT 'pending',
-    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    reviewed_at TIMESTAMP NULL,
-    reviewed_by VARCHAR(255)
-);
-```
-
-**API Endpoint Concept:**
-
-```python
-# In src/admin/registration_api.py (future)
-@app.route('/request-access', methods=['POST'])
-def request_access():
-    # Validate input
-    # Store in database
-    # Notify admin via Slack
-    # Return confirmation to user
-    pass
-
-@app.route('/admin/approve/<request_id>', methods=['POST'])
-def approve_request(request_id):
-    # Get request from database
-    # Add user to ALLOWED_USERS via HerokuConfigManager
-    # Update request status
-    # Notify user
-    pass
-```
-
-### Automated Channel Join Detection
-
-**Concept:** Automatically detect when new users join the Bio-ISAC channel and add them to ALLOWED_USERS.
-
-**Implementation:**
-- Add Slack event listener for `member_joined_channel`
-- When triggered, automatically add user to Heroku config
-- Notify admin channel of new user
-
-**Code Concept:**
-
-```python
-# In src/bot/bot.py (future enhancement)
-@app.event("member_joined_channel")
-def handle_member_join(event, logger):
-    channel_id = event.get("channel")
-    user_id = event.get("user")
-    
-    # Only process for Bio-ISAC channel
-    if channel_id == os.environ.get("BIOISAC_CHANNEL"):
-        try:
-            heroku = HerokuConfigManager()
-            heroku.add_allowed_users([user_id])
-            logger.info(f"Auto-added user {user_id} to ALLOWED_USERS")
-        except Exception as e:
-            logger.error(f"Failed to auto-add user: {e}")
-```
-
-**Requirements:**
-- Bot needs `channels:read` and `groups:read` scopes
-- Event subscription for `member_joined_channel`
-
-### Scheduled User Sync
+### Scheduled User Sync (via Heroku Scheduler)
 
 **Concept:** Automatically sync channel members to ALLOWED_USERS on a schedule.
 
@@ -762,21 +776,22 @@ python -m src.admin.user_manager sync-channel $BIOISAC_CHANNEL --app $HEROKU_APP
 
 This ensures ALLOWED_USERS stays in sync even if manual syncs are forgotten.
 
-### Admin Slack Commands
+### Email Notifications
 
-**Concept:** Allow administrators to manage users directly from Slack.
+**Concept:** Send email confirmations to users when their access is approved or denied.
 
-**Commands:**
-```
-/bioisac admin add-user @username      # Add user to ALLOWED_USERS
-/bioisac admin remove-user @username   # Remove user from ALLOWED_USERS
-/bioisac admin list-users              # List all authorized users
-/bioisac admin sync-channel            # Sync channel members
-```
+**Implementation:**
+- Integrate SendGrid or similar email service
+- Send confirmation email on approval with usage instructions
+- Send notification email on denial with contact information
 
-**Security:**
-- Restrict to specific admin user IDs
-- Log all admin actions
-- Require confirmation for destructive actions
+### Multi-Organization Support
+
+**Concept:** Support multiple Bio-ISAC member organizations with separate access controls.
+
+**Implementation:**
+- Add organization field to user management
+- Create organization-specific channels and permissions
+- Dashboard for organization admins to manage their own users
 
 ---

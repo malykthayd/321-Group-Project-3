@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+import requests
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -28,6 +29,111 @@ def load_env() -> None:
 
 def parse_allow_list(value: str) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def get_admin_users() -> List[str]:
+    """Get list of admin user IDs from environment."""
+    return parse_allow_list(os.environ.get("ADMIN_USERS", ""))
+
+
+def is_admin(user_id: str) -> bool:
+    """Check if a user is an admin."""
+    admin_users = get_admin_users()
+    # If no admins configured, allow all allowed users to be admins
+    if not admin_users:
+        return True
+    return user_id in admin_users
+
+
+# =============================================================================
+# Heroku Config Management (for auto-sync and admin commands)
+# =============================================================================
+
+def get_heroku_allowed_users() -> set:
+    """Get current ALLOWED_USERS from Heroku config."""
+    api_key = os.environ.get("HEROKU_API_KEY")
+    app_name = os.environ.get("HEROKU_APP_NAME")
+    
+    if not api_key or not app_name:
+        return set()
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/vnd.heroku+json; version=3",
+    }
+    
+    try:
+        response = requests.get(
+            f"https://api.heroku.com/apps/{app_name}/config-vars",
+            headers=headers
+        )
+        if response.status_code == 200:
+            config = response.json()
+            allowed = config.get("ALLOWED_USERS", "")
+            return set(u.strip() for u in allowed.split(",") if u.strip())
+    except Exception:
+        pass
+    return set()
+
+
+def update_heroku_allowed_users(user_ids: set) -> bool:
+    """Update ALLOWED_USERS on Heroku."""
+    api_key = os.environ.get("HEROKU_API_KEY")
+    app_name = os.environ.get("HEROKU_APP_NAME")
+    
+    if not api_key or not app_name:
+        return False
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/vnd.heroku+json; version=3",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.patch(
+            f"https://api.heroku.com/apps/{app_name}/config-vars",
+            headers=headers,
+            json={"ALLOWED_USERS": ",".join(sorted(user_ids))}
+        )
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
+def add_user_to_allowed(user_id: str) -> tuple[bool, str]:
+    """Add a user to ALLOWED_USERS. Returns (success, message)."""
+    current = get_heroku_allowed_users()
+    if user_id in current:
+        return True, f"User `{user_id}` is already in ALLOWED_USERS"
+    
+    current.add(user_id)
+    if update_heroku_allowed_users(current):
+        return True, f"Successfully added `{user_id}` to ALLOWED_USERS"
+    return False, f"Failed to add `{user_id}` - check HEROKU_API_KEY and HEROKU_APP_NAME"
+
+
+def remove_user_from_allowed(user_id: str) -> tuple[bool, str]:
+    """Remove a user from ALLOWED_USERS. Returns (success, message)."""
+    current = get_heroku_allowed_users()
+    if user_id not in current:
+        return True, f"User `{user_id}` is not in ALLOWED_USERS"
+    
+    current.discard(user_id)
+    if update_heroku_allowed_users(current):
+        return True, f"Successfully removed `{user_id}` from ALLOWED_USERS"
+    return False, f"Failed to remove `{user_id}` - check HEROKU_API_KEY and HEROKU_APP_NAME"
+
+
+def get_slack_user_info(client, user_id: str) -> dict:
+    """Get Slack user info."""
+    try:
+        result = client.users_info(user=user_id)
+        if result.get("ok"):
+            return result.get("user", {})
+    except Exception:
+        pass
+    return {}
 
 
 def ensure_authorized(user_id: str, channel_id: str) -> None:
@@ -259,6 +365,56 @@ def main() -> None:
     def handle_errors(error, body, logger):
         logger.warning("Slack handler error: %s body=%s", error, body)
 
+    # =========================================================================
+    # Automated Channel Join Detection
+    # =========================================================================
+    
+    @app.event("member_joined_channel")
+    def handle_member_joined(event, client, logger):
+        """Auto-add users to ALLOWED_USERS when they join the Bio-ISAC channel."""
+        channel_id = event.get("channel")
+        user_id = event.get("user")
+        
+        # Only process for the configured Bio-ISAC channel
+        bioisac_channel = os.environ.get("BIOISAC_CHANNEL") or os.environ.get("DIGEST_CHANNEL")
+        auto_add_enabled = os.environ.get("AUTO_ADD_CHANNEL_MEMBERS", "false").lower() == "true"
+        
+        if not bioisac_channel or channel_id != bioisac_channel:
+            return
+        
+        if not auto_add_enabled:
+            logger.info(f"User {user_id} joined channel but AUTO_ADD_CHANNEL_MEMBERS is disabled")
+            return
+        
+        # Check if user is a bot
+        user_info = get_slack_user_info(client, user_id)
+        if user_info.get("is_bot"):
+            logger.info(f"Skipping bot user {user_id}")
+            return
+        
+        # Add user to ALLOWED_USERS
+        success, message = add_user_to_allowed(user_id)
+        
+        if success:
+            logger.info(f"Auto-added user {user_id} to ALLOWED_USERS: {message}")
+            
+            # Notify admin channel if configured
+            admin_channel = os.environ.get("ADMIN_NOTIFICATION_CHANNEL")
+            if admin_channel:
+                user_name = user_info.get("real_name") or user_info.get("name", user_id)
+                try:
+                    client.chat_postMessage(
+                        channel=admin_channel,
+                        text=f"🆕 *Auto-Added New User*\n"
+                             f"• User: {user_name} (`{user_id}`)\n"
+                             f"• Channel: <#{channel_id}>\n"
+                             f"• Status: {message}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send admin notification: {e}")
+        else:
+            logger.error(f"Failed to auto-add user {user_id}: {message}")
+
     @app.command("/bioisac")
     def handle_bioisac(ack, respond, body, logger):
         ack()
@@ -356,6 +512,16 @@ Customize your daily digest preferences
 *DAILY DIGEST*
 Automated daily vulnerability summaries are posted to configured channels.
 Use `/bioisac digest-setup` to customize what appears in your personal digest.
+
+────────────────────────────────
+
+*ADMIN COMMANDS* (Administrators only)
+
+`/bioisac admin` - View admin command help
+`/bioisac admin add-user <id>` - Add user to allowed list
+`/bioisac admin remove-user <id>` - Remove user from allowed list
+`/bioisac admin list-users` - List all authorized users
+`/bioisac admin sync-channel` - Sync channel members to allowed list
 
 ────────────────────────────────
 
@@ -820,6 +986,157 @@ Use `/bioisac digest-setup show` to view your preferences"""
                     pass
                 respond(f"*Error:* Failed to update preferences\n\n_Contact your administrator_")
                 logger.error("Error in digest-setup command: %s", e)
+            return
+        
+        # Admin commands
+        if text.startswith("admin"):
+            parts = text.split()
+            
+            # Check if user is admin
+            if not is_admin(user_id):
+                respond("*Access Denied:* Admin commands require administrator privileges.\n\n_Contact your Bio-ISAC administrator if you need admin access._")
+                return
+            
+            if len(parts) < 2:
+                admin_help = """*Bio-ISAC Admin Commands*
+
+*USER MANAGEMENT*
+
+`/bioisac admin add-user <user_id>`
+Add a user to ALLOWED_USERS (grants bot access)
+• Example: `/bioisac admin add-user U01234ABC`
+
+`/bioisac admin remove-user <user_id>`
+Remove a user from ALLOWED_USERS (revokes bot access)
+• Example: `/bioisac admin remove-user U01234ABC`
+
+`/bioisac admin list-users`
+List all currently authorized users
+
+`/bioisac admin sync-channel`
+Sync all members of the Bio-ISAC channel to ALLOWED_USERS
+
+────────────────────────────────
+
+*CONFIGURATION*
+
+These commands require `HEROKU_API_KEY` and `HEROKU_APP_NAME` environment variables.
+
+*Auto-Add:* Set `AUTO_ADD_CHANNEL_MEMBERS=true` to automatically add new channel members.
+
+────────────────────────────────
+
+_Admin access is controlled via the `ADMIN_USERS` environment variable._"""
+                respond(admin_help)
+                return
+            
+            admin_action = parts[1].lower()
+            
+            # Add user command
+            if admin_action == "add-user":
+                if len(parts) < 3:
+                    respond("*Usage:* `/bioisac admin add-user <user_id>`\n\n_Example:_ `/bioisac admin add-user U01234ABC`")
+                    return
+                
+                target_user = parts[2].upper()
+                if not target_user.startswith("U"):
+                    respond(f"*Invalid User ID:* `{target_user}`\n\nSlack user IDs start with 'U' (e.g., U01234ABC)")
+                    return
+                
+                success, message = add_user_to_allowed(target_user)
+                if success:
+                    respond(f"✅ *Success:* {message}\n\n_Heroku will automatically restart with updated permissions._")
+                else:
+                    respond(f"❌ *Error:* {message}")
+                return
+            
+            # Remove user command
+            if admin_action == "remove-user":
+                if len(parts) < 3:
+                    respond("*Usage:* `/bioisac admin remove-user <user_id>`\n\n_Example:_ `/bioisac admin remove-user U01234ABC`")
+                    return
+                
+                target_user = parts[2].upper()
+                if not target_user.startswith("U"):
+                    respond(f"*Invalid User ID:* `{target_user}`\n\nSlack user IDs start with 'U' (e.g., U01234ABC)")
+                    return
+                
+                success, message = remove_user_from_allowed(target_user)
+                if success:
+                    respond(f"✅ *Success:* {message}\n\n_Heroku will automatically restart with updated permissions._")
+                else:
+                    respond(f"❌ *Error:* {message}")
+                return
+            
+            # List users command
+            if admin_action == "list-users":
+                users = get_heroku_allowed_users()
+                
+                if not users:
+                    respond("*ALLOWED_USERS:* No users configured (all users allowed)\n\n_Set HEROKU_API_KEY and HEROKU_APP_NAME to manage users._")
+                    return
+                
+                # Try to get user details
+                user_lines = []
+                for uid in sorted(users):
+                    try:
+                        info = get_slack_user_info(app.client, uid)
+                        name = info.get("real_name") or info.get("name", "Unknown")
+                        user_lines.append(f"• `{uid}` - {name}")
+                    except Exception:
+                        user_lines.append(f"• `{uid}`")
+                
+                respond(f"*Authorized Users ({len(users)})*\n\n" + "\n".join(user_lines))
+                return
+            
+            # Sync channel command
+            if admin_action == "sync-channel":
+                bioisac_channel = os.environ.get("BIOISAC_CHANNEL") or os.environ.get("DIGEST_CHANNEL")
+                
+                if not bioisac_channel:
+                    respond("*Error:* No channel configured.\n\nSet `BIOISAC_CHANNEL` or `DIGEST_CHANNEL` environment variable.")
+                    return
+                
+                respond(f"🔄 *Syncing channel* <#{bioisac_channel}>...\n\n_This may take a moment._")
+                
+                try:
+                    # Get channel members
+                    result = app.client.conversations_members(channel=bioisac_channel, limit=1000)
+                    if not result.get("ok"):
+                        respond(f"*Error:* Could not fetch channel members: {result.get('error')}")
+                        return
+                    
+                    members = result.get("members", [])
+                    
+                    # Filter out bots
+                    human_members = []
+                    for mid in members:
+                        info = get_slack_user_info(app.client, mid)
+                        if not info.get("is_bot"):
+                            human_members.append(mid)
+                    
+                    # Get current allowed users and merge
+                    current = get_heroku_allowed_users()
+                    new_users = set(human_members) - current
+                    updated = current | set(human_members)
+                    
+                    if new_users:
+                        if update_heroku_allowed_users(updated):
+                            respond(f"✅ *Sync Complete*\n\n"
+                                   f"• Added {len(new_users)} new users\n"
+                                   f"• Total authorized: {len(updated)}\n\n"
+                                   f"*New users:*\n" + "\n".join(f"• `{u}`" for u in sorted(new_users)) +
+                                   f"\n\n_Heroku will automatically restart with updated permissions._")
+                        else:
+                            respond(f"❌ *Error:* Failed to update Heroku config vars.\n\nCheck HEROKU_API_KEY and HEROKU_APP_NAME.")
+                    else:
+                        respond(f"✅ *Already in sync*\n\n• {len(human_members)} channel members\n• All are already authorized")
+                    
+                except Exception as e:
+                    respond(f"*Error:* Failed to sync channel: {e}")
+                return
+            
+            respond(f"*Unknown admin command:* `{admin_action}`\n\nType `/bioisac admin` for help.")
             return
         
         # Unknown command
