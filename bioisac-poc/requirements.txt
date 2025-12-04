@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 requests==2.32.3
 pandas==2.2.3
 python-dateutil==2.9.0.post0
+# Note: Heroku API is accessed via REST (requests), no additional SDK required

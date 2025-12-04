@@ -167,7 +167,8 @@ bioisac-poc/
 - `src/etl` – ingest, normalize, score, and upsert vulnerability data.
 - `src/bot` – Slack Bolt app, slash commands, daily digest poster.
 - `src/qa/qa_smoke.py` – connectivity smoke test for DB + Slack.
-- EUVD enrichment hooks are scaffolded but not yet fetching data—extend `src/etl/etl_starter.py` when you’re ready.
+- `src/admin/user_manager.py` – automated Slack user ID management and Heroku config updates.
+- EUVD enrichment hooks are scaffolded but not yet fetching data—extend `src/etl/etl_starter.py` when you're ready.
 
 ## Heroku Production Setup
 
@@ -480,5 +481,302 @@ _Example:_ `/bioisac recent 48`
 - Configure alerts to post `/bioisac recent` output to incident channels
 - Document `/bioisac detail` outputs in incident tickets
 - Track KEV indicators via daily digest
+
+---
+
+## Automated User Management
+
+The Bio-ISAC bot includes an admin module for automating Slack user ID management and Heroku configuration updates.
+
+### Overview
+
+When a new member joins the Bio-ISAC channel, their Slack ID needs to be added to the `ALLOWED_USERS` config var on Heroku. This admin module automates that process:
+
+1. **Fetch Slack IDs** from channel members automatically
+2. **Sync to Heroku** config vars with one command
+3. **Find users by email** for quick ID lookup
+4. **Add/remove users** individually as needed
+
+### Setup
+
+**Environment Variables Required:**
+
+```bash
+SLACK_BOT_TOKEN=xoxb-...        # Bot token with users:read and conversations:members scopes
+HEROKU_API_KEY=...              # Heroku API key (from Account Settings → API Key)
+HEROKU_APP_NAME=your-app-name   # Optional: default app name for commands
+```
+
+**Getting a Heroku API Key:**
+1. Go to [Heroku Dashboard](https://dashboard.heroku.com/account)
+2. Scroll to "API Key" section
+3. Click "Reveal" to see your key, or "Regenerate" to create a new one
+
+### Usage
+
+#### List Current Authorized Users
+
+```bash
+# From local environment
+python -m src.admin.user_manager list
+
+# From Heroku config
+python -m src.admin.user_manager list --app bioisac-bot
+```
+
+#### Fetch Channel Members
+
+Get all Slack user IDs from a channel (e.g., after inviting new members):
+
+```bash
+# Basic list of user IDs
+python -m src.admin.user_manager fetch-channel C01234ABCDE
+
+# Detailed view with names and emails
+python -m src.admin.user_manager fetch-channel C01234ABCDE --details
+
+# Include bot accounts (excluded by default)
+python -m src.admin.user_manager fetch-channel C01234ABCDE --include-bots
+```
+
+Output includes a copy-paste ready format:
+```
+📋 Copy-paste ready (comma-separated):
+U123ABC,U456DEF,U789GHI
+```
+
+#### Sync Channel to Heroku (Recommended)
+
+**One command to sync all channel members to Heroku config:**
+
+```bash
+# Add new channel members to ALLOWED_USERS (keeps existing users)
+python -m src.admin.user_manager sync-channel C01234ABCDE --app bioisac-bot
+
+# Replace ALLOWED_USERS with only current channel members
+python -m src.admin.user_manager sync-channel C01234ABCDE --app bioisac-bot --replace
+```
+
+This is the **recommended workflow** for Whitney or any administrator:
+1. Invite user to the Bio-ISAC Slack channel
+2. Run the sync command
+3. Done! Heroku automatically restarts with updated permissions
+
+#### Add/Remove Specific Users
+
+```bash
+# Add specific user(s)
+python -m src.admin.user_manager add-user U01234ABC U56789DEF --app bioisac-bot
+
+# Remove specific user(s)
+python -m src.admin.user_manager remove-user U01234ABC --app bioisac-bot
+```
+
+#### Find User by Email
+
+When you have a user's email but need their Slack ID:
+
+```bash
+python -m src.admin.user_manager find-email user@example.com
+```
+
+Output:
+```
+✅ Found user:
+   ID:           U01234ABC
+   Name:         John Doe
+   Display Name: johnd
+   Email:        user@example.com
+
+📋 Copy-paste the user ID: U01234ABC
+```
+
+### Workflow for Administrators
+
+**Standard Workflow (After Inviting a New User):**
+
+1. Invite the user to the Bio-ISAC Slack channel using their email
+2. Run the sync command:
+   ```bash
+   python -m src.admin.user_manager sync-channel C01234ABCDE --app bioisac-bot
+   ```
+3. The script will:
+   - Fetch all channel members
+   - Filter out bots
+   - Add any new members to Heroku's ALLOWED_USERS
+   - Report what was added
+4. Heroku automatically restarts the bot with updated permissions
+
+**Alternative: Manual User Addition:**
+
+1. Get the user's Slack ID (from their profile URL or using `find-email`)
+2. Add to Heroku:
+   ```bash
+   python -m src.admin.user_manager add-user U01234ABC --app bioisac-bot
+   ```
+
+### Running on Heroku
+
+You can also run these commands directly on Heroku:
+
+```bash
+# Fetch channel members
+heroku run "python -m src.admin.user_manager fetch-channel C01234ABCDE --details" --app bioisac-bot
+
+# Sync channel (note: still needs HEROKU_API_KEY in config vars)
+heroku run "python -m src.admin.user_manager sync-channel C01234ABCDE --app bioisac-bot" --app bioisac-bot
+```
+
+**Important:** For Heroku commands that update config vars, you'll need `HEROKU_API_KEY` set as a config var on Heroku itself.
+
+---
+
+## Potential Possibilities (Future Enhancements)
+
+This section documents potential features that could be implemented in future iterations.
+
+### Self-Service User Registration Form
+
+**Concept:** A web-based form where users can request access to the Bio-ISAC bot.
+
+**User Flow:**
+1. User visits registration form (e.g., hosted on Heroku or a simple web service)
+2. User enters their information:
+   - Full Name
+   - Email Address
+   - Organization/Company
+   - Slack ID (with instructions on how to find it)
+   - Reason for access / Use case
+3. Form submits to a database or sends notification to administrator
+4. Administrator (Whitney) reviews the request
+5. If approved:
+   - Administrator invites user to the Slack channel using their email
+   - Administrator adds their Slack ID using the existing admin tools (or form auto-adds)
+6. User receives confirmation
+
+**Technical Implementation Options:**
+
+*Option A: Simple Google Form + Spreadsheet*
+- No coding required
+- Google Form collects user info
+- Results go to Google Sheet
+- Administrator manually reviews and processes
+
+*Option B: Flask Web App on Heroku*
+- Add a simple Flask app with registration form
+- Store requests in database (could reuse existing MySQL)
+- Admin dashboard to view and approve requests
+- Automatic Heroku config var update on approval
+
+*Option C: Slack Workflow Integration*
+- Use Slack Workflow Builder to create a request form
+- Form results posted to admin channel
+- Admin reacts to approve/deny
+- Could trigger automatic user addition via bot response
+
+**Database Schema (if implementing Option B):**
+
+```sql
+CREATE TABLE user_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    organization VARCHAR(255),
+    slack_id VARCHAR(20),
+    reason TEXT,
+    status ENUM('pending', 'approved', 'denied') DEFAULT 'pending',
+    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at TIMESTAMP NULL,
+    reviewed_by VARCHAR(255)
+);
+```
+
+**API Endpoint Concept:**
+
+```python
+# In src/admin/registration_api.py (future)
+@app.route('/request-access', methods=['POST'])
+def request_access():
+    # Validate input
+    # Store in database
+    # Notify admin via Slack
+    # Return confirmation to user
+    pass
+
+@app.route('/admin/approve/<request_id>', methods=['POST'])
+def approve_request(request_id):
+    # Get request from database
+    # Add user to ALLOWED_USERS via HerokuConfigManager
+    # Update request status
+    # Notify user
+    pass
+```
+
+### Automated Channel Join Detection
+
+**Concept:** Automatically detect when new users join the Bio-ISAC channel and add them to ALLOWED_USERS.
+
+**Implementation:**
+- Add Slack event listener for `member_joined_channel`
+- When triggered, automatically add user to Heroku config
+- Notify admin channel of new user
+
+**Code Concept:**
+
+```python
+# In src/bot/bot.py (future enhancement)
+@app.event("member_joined_channel")
+def handle_member_join(event, logger):
+    channel_id = event.get("channel")
+    user_id = event.get("user")
+    
+    # Only process for Bio-ISAC channel
+    if channel_id == os.environ.get("BIOISAC_CHANNEL"):
+        try:
+            heroku = HerokuConfigManager()
+            heroku.add_allowed_users([user_id])
+            logger.info(f"Auto-added user {user_id} to ALLOWED_USERS")
+        except Exception as e:
+            logger.error(f"Failed to auto-add user: {e}")
+```
+
+**Requirements:**
+- Bot needs `channels:read` and `groups:read` scopes
+- Event subscription for `member_joined_channel`
+
+### Scheduled User Sync
+
+**Concept:** Automatically sync channel members to ALLOWED_USERS on a schedule.
+
+**Implementation:**
+- Add a Heroku Scheduler job
+- Run daily or weekly
+- Sync all current channel members
+
+**Scheduler Command:**
+
+```bash
+# Add to Heroku Scheduler
+python -m src.admin.user_manager sync-channel $BIOISAC_CHANNEL --app $HEROKU_APP_NAME
+```
+
+This ensures ALLOWED_USERS stays in sync even if manual syncs are forgotten.
+
+### Admin Slack Commands
+
+**Concept:** Allow administrators to manage users directly from Slack.
+
+**Commands:**
+```
+/bioisac admin add-user @username      # Add user to ALLOWED_USERS
+/bioisac admin remove-user @username   # Remove user from ALLOWED_USERS
+/bioisac admin list-users              # List all authorized users
+/bioisac admin sync-channel            # Sync channel members
+```
+
+**Security:**
+- Restrict to specific admin user IDs
+- Log all admin actions
+- Require confirmation for destructive actions
 
 ---
