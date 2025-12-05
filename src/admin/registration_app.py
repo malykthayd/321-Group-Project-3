@@ -250,6 +250,28 @@ def invite_user_to_channel(user_id: str, channel_id: str) -> tuple[bool, str]:
         return False, "SLACK_BOT_TOKEN not configured"
     
     try:
+        # First, verify the channel exists and bot can access it
+        info_response = requests.get(
+            "https://slack.com/api/conversations.info",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            },
+            params={"channel": channel_id}
+        )
+        info_data = info_response.json()
+        
+        if not info_data.get("ok"):
+            error = info_data.get("error", "Unknown error")
+            if error == "channel_not_found":
+                return False, f"Channel not found or bot is not a member. Please ensure the bot is added to channel {channel_id} and has 'channels:read' scope."
+            return False, f"Cannot access channel: {error}"
+        
+        channel_info = info_data.get("channel", {})
+        if not channel_info.get("is_member"):
+            return False, f"Bot is not a member of channel {channel_info.get('name', channel_id)}. Please add the bot to the channel first."
+        
+        # Now attempt the invite
         response = requests.post(
             "https://slack.com/api/conversations.invite",
             headers={
@@ -266,6 +288,12 @@ def invite_user_to_channel(user_id: str, channel_id: str) -> tuple[bool, str]:
             return True, "Successfully invited to channel"
         else:
             error = data.get("error", "Unknown error")
+            if error == "already_in_channel":
+                return True, "User is already in the channel"
+            elif error == "channel_not_found":
+                return False, f"Channel not found. Verify channel ID {channel_id} is correct."
+            elif error == "missing_scope":
+                return False, "Bot token missing required scope (channels:write or channels:manage). Please add scope and reinstall app."
             return False, f"Slack API error: {error}"
     except Exception as e:
         return False, f"Exception: {str(e)}"
