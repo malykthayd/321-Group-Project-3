@@ -958,7 +958,25 @@ Use `/bioisac digest-setup show` to view your preferences"""
                     respond(response)
                 
                 elif action == "disable":
-                    queries.set_digest_preference(conn, user_id=user_id, enabled=False)
+                    # Reset all preferences to defaults when disabling
+                    # Need to explicitly set digest_time to NULL in database
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE digest_preferences 
+                        SET medical_flag = 0,
+                            ics_flag = 0,
+                            bio_keyword_flag = 0,
+                            kev_flag = 0,
+                            min_cvss = NULL,
+                            min_bio_score = NULL,
+                            limit_count = 10,
+                            digest_time = NULL,
+                            enabled = 0,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE slack_user_id = %s AND preference_name = 'default'
+                    """, (user_id,))
+                    conn.commit()
+                    cursor.close()
                     respond("*Digest Preferences Disabled*\n\nYou will receive the default digest. Use `/bioisac digest-setup set` to re-enable custom filters.")
                 
                 else:
