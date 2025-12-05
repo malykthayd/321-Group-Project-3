@@ -1022,7 +1022,14 @@ def admin_approve(request_id):
         # Add to Heroku
         heroku_success = add_user_to_heroku(slack_id)
         
-        # Invite to Bio-ISAC channel if configured
+        # Update request status first (so approval is recorded even if invite fails)
+        try:
+            update_request_status(request_id, "approved", "admin")
+        except Exception as e:
+            flash(f"Error updating request status: {str(e)}", "error")
+            return redirect(url_for("admin_dashboard"))
+        
+        # Try to invite to Bio-ISAC channel (non-blocking - approval already succeeded)
         channel_invited = False
         channel_message = ""
         bioisac_channel = os.environ.get("BIOISAC_CHANNEL") or os.environ.get("DIGEST_CHANNEL")
@@ -1030,22 +1037,14 @@ def admin_approve(request_id):
             try:
                 channel_invited, channel_message = invite_user_to_channel(slack_id, bioisac_channel)
             except Exception as e:
-                # If invitation fails, continue anyway
                 channel_message = f"Exception: {str(e)}"
-        
-        # Update request status
-        try:
-            update_request_status(request_id, "approved", "admin")
-        except Exception as e:
-            flash(f"Error updating request status: {str(e)}", "error")
-            return redirect(url_for("admin_dashboard"))
         
         # Build success message
         if heroku_success and channel_invited:
             flash(f"✅ Approved {req['full_name']} and added {slack_id} to Heroku ALLOWED_USERS. User has been invited to the Bio-ISAC channel.", "success")
         elif heroku_success:
-            error_detail = channel_message if channel_message else "channel may not be configured"
-            flash(f"✅ Approved {req['full_name']} and added {slack_id} to Heroku ALLOWED_USERS. Note: Could not invite to channel ({error_detail}).", "warning")
+            # Approval succeeded, but channel invite failed - this is OK
+            flash(f"✅ Approved {req['full_name']} and added {slack_id} to Heroku ALLOWED_USERS. Note: Automatic channel invitation failed - please invite {req['full_name']} to the channel manually in Slack.", "warning")
         else:
             flash(f"✅ Approved {req['full_name']}. Note: Could not auto-update Heroku. Please add {slack_id} manually.", "warning")
         
