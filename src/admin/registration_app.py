@@ -250,9 +250,19 @@ def invite_user_to_channel(user_id: str, channel_id: str) -> tuple[bool, str]:
         return False, "SLACK_BOT_TOKEN not configured"
     
     try:
-        # Attempt the invite directly
-        # Note: Bots installed as integrations can sometimes invite users
-        # even if they're not listed as "members" in the UI
+        # First, try to have the bot join the channel if it's not already a member
+        # This is required for the bot to be able to invite others
+        join_response = requests.post(
+            "https://slack.com/api/conversations.join",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            },
+            json={"channel": channel_id}
+        )
+        # Don't fail if join fails - bot might already be a member or join might not be allowed
+        
+        # Now attempt the invite
         response = requests.post(
             "https://slack.com/api/conversations.invite",
             headers={
@@ -272,12 +282,10 @@ def invite_user_to_channel(user_id: str, channel_id: str) -> tuple[bool, str]:
             if error == "already_in_channel":
                 return True, "User is already in the channel"
             elif error == "channel_not_found":
-                # Try to determine if it's private based on channel ID prefix
-                is_private = channel_id.startswith("G")
-                scope_hint = "groups:read and groups:write" if is_private else "channels:read and channels:write"
-                return False, f"Channel not found. The bot may need to be added to the channel. If it's a private channel, ensure bot has '{scope_hint}' scopes and was reinstalled after adding scopes."
+                return False, f"Bot cannot see channel {channel_id}. The bot must be added as a member to the channel in Slack before it can invite users. Add the bot manually via '/invite @bioisac-bot' in the channel."
             elif error == "missing_scope":
-                required_scope = "groups:write" if channel_is_private or channel_id.startswith("G") else "channels:write"
+                is_private = channel_id.startswith("G")
+                required_scope = "groups:write" if is_private else "channels:write"
                 return False, f"Bot token missing required scope '{required_scope}'. Add the scope and reinstall the app to your workspace."
             return False, f"Slack API error: {error}"
     except Exception as e:
