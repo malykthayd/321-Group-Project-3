@@ -250,7 +250,8 @@ def invite_user_to_channel(user_id: str, channel_id: str) -> tuple[bool, str]:
         return False, "SLACK_BOT_TOKEN not configured"
     
     try:
-        # First, verify the channel exists and bot can access it
+        # First, try to verify the channel exists and bot can access it
+        # This helps provide better error messages
         info_response = requests.get(
             "https://slack.com/api/conversations.info",
             headers={
@@ -261,17 +262,22 @@ def invite_user_to_channel(user_id: str, channel_id: str) -> tuple[bool, str]:
         )
         info_data = info_response.json()
         
-        if not info_data.get("ok"):
+        channel_is_private = False
+        if info_data.get("ok"):
+            channel_info = info_data.get("channel", {})
+            channel_is_private = channel_info.get("is_private", False)
+            if not channel_info.get("is_member"):
+                return False, f"Bot is not a member of channel {channel_info.get('name', channel_id)}. Please add the bot to the channel first in Slack."
+        else:
+            # If we can't get channel info, it might be private or bot not a member
+            # We'll still try the invite - it might work if bot is a member
             error = info_data.get("error", "Unknown error")
-            if error == "channel_not_found":
-                return False, f"Channel not found or bot is not a member. Please ensure the bot is added to channel {channel_id} and has 'channels:read' scope."
-            return False, f"Cannot access channel: {error}"
+            if error == "missing_scope":
+                required_scope = "groups:read" if channel_id.startswith("G") else "channels:read"
+                return False, f"Bot token missing required scope '{required_scope}'. Please add the scope and reinstall the app to your workspace."
+            # Don't fail here - try the invite anyway
         
-        channel_info = info_data.get("channel", {})
-        if not channel_info.get("is_member"):
-            return False, f"Bot is not a member of channel {channel_info.get('name', channel_id)}. Please add the bot to the channel first."
-        
-        # Now attempt the invite
+        # Attempt the invite
         response = requests.post(
             "https://slack.com/api/conversations.invite",
             headers={
@@ -291,9 +297,11 @@ def invite_user_to_channel(user_id: str, channel_id: str) -> tuple[bool, str]:
             if error == "already_in_channel":
                 return True, "User is already in the channel"
             elif error == "channel_not_found":
-                return False, f"Channel not found. Verify channel ID {channel_id} is correct."
+                scope_hint = "groups:read and groups:write" if channel_is_private or channel_id.startswith("G") else "channels:read and channels:write"
+                return False, f"Channel not found or bot is not a member. Ensure: (1) Bot is added to channel {channel_id} in Slack, (2) Bot has '{scope_hint}' scopes, (3) App was reinstalled after adding scopes."
             elif error == "missing_scope":
-                return False, "Bot token missing required scope (channels:write or channels:manage). Please add scope and reinstall app."
+                required_scope = "groups:write" if channel_is_private or channel_id.startswith("G") else "channels:write"
+                return False, f"Bot token missing required scope '{required_scope}'. Add the scope and reinstall the app to your workspace."
             return False, f"Slack API error: {error}"
     except Exception as e:
         return False, f"Exception: {str(e)}"
