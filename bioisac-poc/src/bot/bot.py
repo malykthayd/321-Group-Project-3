@@ -635,7 +635,8 @@ _For technical support, contact your Bio-ISAC security administrator_"""
                     logger.error("Database connection error in recent command: %s", e)
                     return
                 try:
-                    rows = queries.get_recent_vulns(conn, hours=hours, limit=20)
+                    # Fetch more results to get accurate count, then paginate for display
+                    rows = queries.get_recent_vulns(conn, hours=hours, limit=100)
                 except Exception as e:
                     conn.close()
                     respond(f"*Database Error:* Failed to query vulnerability data\n\n_Contact your administrator if this persists_")
@@ -656,7 +657,8 @@ _For technical support, contact your Bio-ISAC security administrator_"""
                     f"Narrow the timeframe with `/bioisac recent <hours>` to see more focused results"
                 )
                 
-                header = f"*Recent Vulnerabilities — Last {hours} Hours*\n{len(display_rows)} of {len(rows)} entries shown\n\n"
+                total_text = f"{len(rows)}" if len(rows) < 100 else "100+"
+                header = f"*Recent Vulnerabilities — Last {hours} Hours*\n{len(display_rows)} of {total_text} entries shown\n\n"
                 respond(header + render_message(display_rows, hint=False) + truncation_footer)
             except Exception as e:
                 error_msg = str(e)

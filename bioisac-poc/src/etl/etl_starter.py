@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -105,6 +106,8 @@ def _extract_vendor_product(cve: Dict) -> tuple[Optional[str], Optional[str]]:
                 nodes.extend(config.get("nodes", []))
     elif isinstance(configurations, dict):
         nodes = configurations.get("nodes", []) or []
+    
+    # Try to extract from CPE data first
     for node in nodes:
         matches = node.get("cpeMatch") or []
         for match in matches:
@@ -113,12 +116,29 @@ def _extract_vendor_product(cve: Dict) -> tuple[Optional[str], Optional[str]]:
                 continue
             parts = cpe23.split(":")
             if len(parts) >= 5:
-                vendor = parts[3] or vendor
-                product = parts[4] or product
+                # Only set if not already found (prefer first non-empty values)
+                if not vendor and parts[3] and parts[3] not in ("*", "-"):
+                    vendor = parts[3]
+                if not product and parts[4] and parts[4] not in ("*", "-"):
+                    product = parts[4]
             if vendor and product:
                 break
         if vendor and product:
             break
+    
+    # If still no vendor/product, try extracting from description (e.g., "WordPress plugin X")
+    if not vendor or not product:
+        descriptions = cve.get("descriptions", [])
+        if descriptions:
+            desc = descriptions[0].get("value", "")
+            # Try to extract WordPress plugin names
+            wp_match = re.search(r'wordpress\s+(?:plugin\s+)?["\']?([^"\']+)["\']?', desc, re.IGNORECASE)
+            if wp_match:
+                if not vendor:
+                    vendor = "WordPress"
+                if not product:
+                    product = wp_match.group(1).strip()
+    
     return vendor, product
 
 
