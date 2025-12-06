@@ -252,7 +252,10 @@ def get_digest(conn, limit: int = 10, hours: int = 24,
                min_cvss: Optional[float] = None,
                min_bio_score: Optional[int] = None) -> List[Dict[str, Any]]:
     """Get digest vulnerabilities with optional filtering."""
-    conditions = ["t.last_seen >= (NOW() - INTERVAL %s HOUR)"]
+    # Use updated_at instead of last_seen to show new OR updated vulnerabilities
+    # updated_at only changes when vulnerability data actually changes (CVSS, description, etc.)
+    # last_seen gets updated every time ETL runs even if nothing changed, causing duplicates
+    conditions = ["v.updated_at >= (NOW() - INTERVAL %s HOUR)"]
     params = [hours]
     
     if medical_flag is not None:

@@ -119,14 +119,21 @@ def post_daily_digest(limit: int = 10, use_preferences: bool = True) -> None:
         raise RuntimeError(f"Failed to connect to database: {e}")
     
     # Get stats for the digest (used by all digests)
+    # Use updated_at to count new OR updated vulnerabilities (only when data actually changed)
     cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT COUNT(*) as total FROM tags WHERE last_seen >= (NOW() - INTERVAL %s HOUR)", (hours,))
+    cursor.execute("""
+        SELECT COUNT(*) as total 
+        FROM tags t 
+        JOIN vulns v ON t.cve_id = v.cve_id 
+        WHERE v.updated_at >= (NOW() - INTERVAL %s HOUR)
+    """, (hours,))
     recent_count = cursor.fetchone()["total"]
     
     cursor.execute("""
-        SELECT SUM(kev_flag) as kev_count
-        FROM tags 
-        WHERE last_seen >= (NOW() - INTERVAL %s HOUR)
+        SELECT SUM(t.kev_flag) as kev_count
+        FROM tags t
+        JOIN vulns v ON t.cve_id = v.cve_id
+        WHERE v.updated_at >= (NOW() - INTERVAL %s HOUR)
     """, (hours,))
     kev_result = cursor.fetchone()
     kev_count = kev_result["kev_count"] or 0
