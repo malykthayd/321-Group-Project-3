@@ -200,12 +200,14 @@ def search_vulns(conn, term: str, limit: int = 20) -> List[Dict[str, Any]]:
 
 
 def get_recent_vulns(conn, hours: int = 24, limit: int = 5) -> List[Dict[str, Any]]:
+    # Use v.updated_at instead of t.last_seen to show vulnerabilities that were actually
+    # added or updated recently, not just when ETL last ran (which may not have changed anything)
     sql = (
         "SELECT v.*, t.bio_score, t.confidence_level, t.kev_flag, t.ics_flag, t.medical_flag,"
         " t.bio_keyword_flag, t.recent_flag, t.cvss_high_flag, t.source_count, t.conflict_flag, t.category_labels "
         "FROM vulns v JOIN tags t ON v.cve_id = t.cve_id "
-        "WHERE t.last_seen >= (NOW() - INTERVAL %s HOUR) "
-        "ORDER BY t.last_seen DESC, t.bio_score DESC LIMIT %s"
+        "WHERE v.updated_at >= (NOW() - INTERVAL %s HOUR) "
+        "ORDER BY v.updated_at DESC, t.bio_score DESC LIMIT %s"
     )
     cursor = conn.cursor(dictionary=True)
     cursor.execute(sql, (hours, limit))
